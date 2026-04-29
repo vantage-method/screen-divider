@@ -8,21 +8,45 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     private var overlayController: ZoneOverlayController!
     private var preferencesController: PreferencesWindowController?
     var currentConfig: ScreenDividerConfig?
+    private var permissionCheckTimer: Timer?
+    private var hasShownWelcome = false
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
         return false
     }
 
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
-        // Only quit if the user explicitly chose Quit from the menu
-        // This prevents macOS from auto-killing us when windows close
         return .terminateNow
     }
+
+    // MARK: - Permission checks
+
+    private var hasAccessibility: Bool {
+        return AXIsProcessTrusted()
+    }
+
+    private var hasInputMonitoring: Bool {
+        let testMask: CGEventMask = 1 << CGEventType.mouseMoved.rawValue
+        if let tap = CGEvent.tapCreate(tap: .cgSessionEventTap, place: .headInsertEventTap,
+                                        options: .listenOnly, eventsOfInterest: testMask,
+                                        callback: { _, _, e, _ in Unmanaged.passUnretained(e) },
+                                        userInfo: nil) {
+            CFMachPortInvalidate(tap)
+            return true
+        }
+        return false
+    }
+
+    private var allPermissionsGranted: Bool {
+        return hasAccessibility && hasInputMonitoring
+    }
+
+    // MARK: - Launch
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
 
-        // Set app icon (shown in preferences window, Force Quit, Activity Monitor, Finder)
+        // Set app icon
         let execURL = URL(fileURLWithPath: ProcessInfo.processInfo.arguments[0])
         let resourceDir = execURL.deletingLastPathComponent().appendingPathComponent("Resources")
         for name in ["AppIcon.icns", "app-icon@2x.png", "app-icon.png"] {
@@ -37,29 +61,6 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         if let button = statusItem.button { button.title = "SD" }
 
         DispatchQueue.main.async { [self] in
-            let trusted = AXIsProcessTrustedWithOptions(
-                [kAXTrustedCheckOptionPrompt.takeUnretainedValue(): true] as CFDictionary)
-            if !trusted { NSLog("ScreenDivider: Accessibility permission required.") }
-
-            let testMask: CGEventMask = 1 << CGEventType.mouseMoved.rawValue
-            if let testTap = CGEvent.tapCreate(tap: .cgSessionEventTap, place: .headInsertEventTap,
-                                                options: .listenOnly, eventsOfInterest: testMask,
-                                                callback: { _, _, e, _ in Unmanaged.passUnretained(e) },
-                                                userInfo: nil) {
-                CFMachPortInvalidate(testTap)
-            } else {
-                DispatchQueue.main.async {
-                    let alert = NSAlert()
-                    alert.messageText = "Input Monitoring Permission Needed"
-                    alert.informativeText = "Screen Divider needs Input Monitoring to detect window drags.\n\nSystem Settings > Privacy & Security > Input Monitoring"
-                    alert.addButton(withTitle: "Open Settings")
-                    alert.addButton(withTitle: "Later")
-                    if alert.runModal() == .alertFirstButtonReturn {
-                        NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_ListenEvent")!)
-                    }
-                }
-            }
-
             if let iconImage = loadMenuBarIcon() {
                 iconImage.isTemplate = true
                 statusItem.button?.image = iconImage
@@ -81,21 +82,65 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                 self?.statusItem.menu = self?.buildMenu()
             }
             configManager.startWatching()
+
+            // Show welcome/permissions on first launch or if permissions are missing
+            if !allPermissionsGranted {
+                showWelcome()
+            }
+
+            // Periodically check permissions and update menu
+            permissionCheckTimer = Timer.scheduledTimer(withTimeInterval: 3.0, repeats: true) { [weak self] _ in
+                self?.statusItem.menu = self?.buildMenu()
+            }
         }
     }
+
+    // MARK: - Welcome / Onboarding
+
+    private func showWelcome() {
+        guard !hasShownWelcome else { return }
+        hasShownWelcome = true
+
+        NSApp.activate(ignoringOtherApps: true)
+
+        let alert = NSAlert()
+        alert.messageText = "Welcome to Screen Divider!"
+        alert.informativeText = """
+        Screen Divider needs two permissions to work:
+
+        1. Accessibility — to move and resize your windows
+        2. Input Monitoring — to detect when you drag a window
+
+        Click "Grant Permissions" to open System Settings. \
+        You may need to click the lock, then toggle Screen Divider on in both sections.
+
+        After granting, drag any window to see your snap zones appear!
+        """
+        alert.alertStyle = .informational
+        alert.addButton(withTitle: "Grant Permissions")
+        alert.addButton(withTitle: "I'll Do It Later")
+
+        if alert.runModal() == .alertFirstButtonReturn {
+            openAccessibilitySettings()
+        }
+
+        // Trigger the system prompt for accessibility
+        AXIsProcessTrustedWithOptions(
+            [kAXTrustedCheckOptionPrompt.takeUnretainedValue(): true] as CFDictionary)
+    }
+
+    // MARK: - Menu bar icon
 
     private func loadMenuBarIcon() -> NSImage? {
         let execURL = URL(fileURLWithPath: ProcessInfo.processInfo.arguments[0])
         let resourceDir = execURL.deletingLastPathComponent().appendingPathComponent("Resources")
         let bundleResourceDir = Bundle.main.resourceURL
 
-        // Build a multi-representation image for crisp rendering on all displays
         let img = NSImage(size: NSSize(width: 16, height: 16))
         var added = false
 
         for (suffix, scale) in [("", 1), ("@2x", 2), ("@3x", 3)] {
             let filename = "menubar-icon\(suffix).png"
-            // Check bundle first, then relative path
             let candidates = [
                 bundleResourceDir?.appendingPathComponent(filename),
                 resourceDir.appendingPathComponent(filename)
@@ -104,8 +149,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             for url in candidates {
                 if let rep = NSImageRep(contentsOf: url) {
                     rep.size = NSSize(width: 16, height: 16)
-                    rep.pixelsWide = 18 * scale
-                    rep.pixelsHigh = 18 * scale
+                    rep.pixelsWide = 16 * scale
+                    rep.pixelsHigh = 16 * scale
                     img.addRepresentation(rep)
                     added = true
                     break
@@ -115,11 +160,12 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
         if added { return img }
 
-        // Fallback to SF Symbol
         let fallback = NSImage(systemSymbolName: "rectangle.split.3x3", accessibilityDescription: "Screen Divider")
         fallback?.size = NSSize(width: 16, height: 16)
         return fallback
     }
+
+    // MARK: - Drag detection
 
     private func setupDragDetector() {
         dragDetector.onDragStarted = { [weak self] _ in
@@ -140,9 +186,35 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
+    // MARK: - Menu
+
     private func buildMenu() -> NSMenu {
         let menu = NSMenu()
 
+        // Permission status at the top if something is missing
+        let accOK = hasAccessibility
+        let inputOK = hasInputMonitoring
+
+        if !accOK || !inputOK {
+            let statusItem = NSMenuItem(title: "Setup Required", action: nil, keyEquivalent: "")
+            statusItem.isEnabled = false
+            menu.addItem(statusItem)
+
+            if !accOK {
+                let item = NSMenuItem(title: "   Grant Accessibility...", action: #selector(openAccessibilitySettings), keyEquivalent: "")
+                item.target = self
+                menu.addItem(item)
+            }
+            if !inputOK {
+                let item = NSMenuItem(title: "   Grant Input Monitoring...", action: #selector(openInputMonitoringSettings), keyEquivalent: "")
+                item.target = self
+                menu.addItem(item)
+            }
+
+            menu.addItem(.separator())
+        }
+
+        // Screen layouts
         if let config = currentConfig {
             for (index, layout) in config.screens.enumerated() {
                 let count = layout.root.zoneCount
@@ -171,15 +243,30 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         loginItem.state = LoginItemManager.shared.isEnabled ? .on : .off
         menu.addItem(loginItem)
 
+        // Always show permissions link at the bottom
+        let permItem = NSMenuItem(title: "Permissions...", action: #selector(openAccessibilitySettings), keyEquivalent: "")
+        permItem.target = self
+        menu.addItem(permItem)
+
         menu.addItem(.separator())
         menu.addItem(NSMenuItem(title: "Quit", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q"))
 
         return menu
     }
 
+    // MARK: - Actions
+
     @objc private func toggleDrag(_ sender: NSMenuItem) {
         dragDetector.isEnabled.toggle()
         sender.state = dragDetector.isEnabled ? .on : .off
+    }
+
+    @objc private func openAccessibilitySettings() {
+        NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility")!)
+    }
+
+    @objc private func openInputMonitoringSettings() {
+        NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_ListenEvent")!)
     }
 
     @objc private func openPreferencesForScreen(_ sender: NSMenuItem) {
@@ -191,7 +278,6 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func showPreferences(selectScreenIndex: Int?) {
-        // Determine which screen to select: explicit choice, or auto-detect from mouse location
         let screenIndex: Int
         if let explicit = selectScreenIndex {
             screenIndex = explicit
