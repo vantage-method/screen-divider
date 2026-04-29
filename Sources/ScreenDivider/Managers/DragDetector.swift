@@ -84,12 +84,17 @@ class DragDetector {
             dragCheckCount = 0
             mouseDownPoint = loc
 
-            // Try to get a window: first the focused window, then the window at click position
-            if let w = getFocusedWindow(), let pos = getWindowPosition(w) {
+            // Get the PID of the frontmost app (ignore our own app)
+            let ownPID = ProcessInfo.processInfo.processIdentifier
+
+            // Try the window at the click position first (more reliable than focused window)
+            if let w = getWindowAtPosition(loc), !isOwnWindow(w, ownPID: ownPID),
+               let pos = getWindowPosition(w) {
                 trackedWindow = w
                 lastWindowPosition = pos
                 dragState = .watching
-            } else if let w = getWindowAtPosition(loc), let pos = getWindowPosition(w) {
+            } else if let w = getFocusedWindow(), !isOwnWindow(w, ownPID: ownPID),
+                      let pos = getWindowPosition(w) {
                 trackedWindow = w
                 lastWindowPosition = pos
                 dragState = .watching
@@ -159,6 +164,12 @@ class DragDetector {
     }
 
     // MARK: - Accessibility helpers
+
+    private func isOwnWindow(_ window: AXUIElement, ownPID: Int32) -> Bool {
+        var pid: pid_t = 0
+        AXUIElementGetPid(window, &pid)
+        return pid == ownPID
+    }
 
     private func getFocusedWindow() -> AXUIElement? {
         let systemWide = AXUIElementCreateSystemWide()
