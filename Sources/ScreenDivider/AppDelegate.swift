@@ -9,7 +9,6 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     private var preferencesController: PreferencesWindowController?
     var currentConfig: ScreenDividerConfig?
     private var permissionCheckTimer: Timer?
-    private var hasShownWelcome = false
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
         return false
@@ -25,20 +24,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         return AXIsProcessTrusted()
     }
 
-    private var hasInputMonitoring: Bool {
-        let testMask: CGEventMask = 1 << CGEventType.mouseMoved.rawValue
-        if let tap = CGEvent.tapCreate(tap: .cgSessionEventTap, place: .headInsertEventTap,
-                                        options: .listenOnly, eventsOfInterest: testMask,
-                                        callback: { _, _, e, _ in Unmanaged.passUnretained(e) },
-                                        userInfo: nil) {
-            CFMachPortInvalidate(tap)
-            return true
-        }
-        return false
-    }
-
     private var allPermissionsGranted: Bool {
-        return hasAccessibility && hasInputMonitoring
+        return hasAccessibility
     }
 
     // MARK: - Launch
@@ -83,51 +70,29 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             }
             configManager.startWatching()
 
-            // Show welcome/permissions on first launch or if permissions are missing
-            if !allPermissionsGranted {
-                showWelcome()
-            }
+            // Trigger the native macOS accessibility prompt
+            AXIsProcessTrustedWithOptions(
+                [kAXTrustedCheckOptionPrompt.takeUnretainedValue(): true] as CFDictionary)
 
-            // Periodically check permissions and update menu
-            permissionCheckTimer = Timer.scheduledTimer(withTimeInterval: 3.0, repeats: true) { [weak self] _ in
-                self?.statusItem.menu = self?.buildMenu()
+            // Periodically check permissions; restart drag detector once granted
+            var wasGranted = hasAccessibility
+            permissionCheckTimer = Timer.scheduledTimer(withTimeInterval: 2.0, repeats: true) { [weak self] _ in
+                guard let self = self else { return }
+                let nowGranted = self.hasAccessibility
+                if nowGranted && !wasGranted {
+                    // Permission was just granted — restart the drag detector
+                    // so NSEvent monitors are created with the new permission
+                    NSLog("ScreenDivider: Accessibility granted — restarting drag detector")
+                    self.dragDetector.stop()
+                    self.dragDetector.start()
+                    wasGranted = true
+                }
+                self.statusItem.menu = self.buildMenu()
             }
         }
     }
 
-    // MARK: - Welcome / Onboarding
-
-    private func showWelcome() {
-        guard !hasShownWelcome else { return }
-        hasShownWelcome = true
-
-        NSApp.activate(ignoringOtherApps: true)
-
-        let alert = NSAlert()
-        alert.messageText = "Welcome to Screen Divider!"
-        alert.informativeText = """
-        Screen Divider needs two permissions to work:
-
-        1. Accessibility — to move and resize your windows
-        2. Input Monitoring — to detect when you drag a window
-
-        Click "Grant Permissions" to open System Settings. \
-        You may need to click the lock, then toggle Screen Divider on in both sections.
-
-        After granting, drag any window to see your snap zones appear!
-        """
-        alert.alertStyle = .informational
-        alert.addButton(withTitle: "Grant Permissions")
-        alert.addButton(withTitle: "I'll Do It Later")
-
-        if alert.runModal() == .alertFirstButtonReturn {
-            openAccessibilitySettings()
-        }
-
-        // Trigger the system prompt for accessibility
-        AXIsProcessTrustedWithOptions(
-            [kAXTrustedCheckOptionPrompt.takeUnretainedValue(): true] as CFDictionary)
-    }
+    // MARK: - Permissions
 
     // MARK: - Menu bar icon
 
@@ -193,24 +158,11 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
         // Permission status at the top if something is missing
         let accOK = hasAccessibility
-        let inputOK = hasInputMonitoring
 
-        if !accOK || !inputOK {
-            let statusItem = NSMenuItem(title: "Setup Required", action: nil, keyEquivalent: "")
-            statusItem.isEnabled = false
-            menu.addItem(statusItem)
-
-            if !accOK {
-                let item = NSMenuItem(title: "   Grant Accessibility...", action: #selector(openAccessibilitySettings), keyEquivalent: "")
-                item.target = self
-                menu.addItem(item)
-            }
-            if !inputOK {
-                let item = NSMenuItem(title: "   Grant Input Monitoring...", action: #selector(openInputMonitoringSettings), keyEquivalent: "")
-                item.target = self
-                menu.addItem(item)
-            }
-
+        if !accOK {
+            let item = NSMenuItem(title: "Grant Accessibility...", action: #selector(openAccessibilitySettings), keyEquivalent: "")
+            item.target = self
+            menu.addItem(item)
             menu.addItem(.separator())
         }
 
@@ -243,7 +195,6 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         loginItem.state = LoginItemManager.shared.isEnabled ? .on : .off
         menu.addItem(loginItem)
 
-        // Always show permissions link at the bottom
         let permItem = NSMenuItem(title: "Permissions...", action: #selector(openAccessibilitySettings), keyEquivalent: "")
         permItem.target = self
         menu.addItem(permItem)
@@ -265,9 +216,6 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility")!)
     }
 
-    @objc private func openInputMonitoringSettings() {
-        NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_ListenEvent")!)
-    }
 
     @objc private func openPreferencesForScreen(_ sender: NSMenuItem) {
         showPreferences(selectScreenIndex: sender.tag)

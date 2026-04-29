@@ -23,6 +23,7 @@ swiftc -sdk "$(xcrun --sdk macosx --show-sdk-path)" \
   Sources/ScreenDivider/Models/Config.swift \
   Sources/ScreenDivider/Views/PreferencesWindowController.swift \
   Sources/ScreenDivider/Views/ZoneOverlayController.swift \
+  Sources/ScreenDivider/Views/SetupWindowController.swift \
   Sources/ScreenDivider/Views/ZoneOverlayView.swift
 
 echo "Creating app bundle..."
@@ -44,6 +45,9 @@ cp Resources/menubar-icon.png "$BUNDLE_PATH/Contents/Resources/" 2>/dev/null || 
 cp Resources/menubar-icon@2x.png "$BUNDLE_PATH/Contents/Resources/" 2>/dev/null || true
 cp Resources/menubar-icon@3x.png "$BUNDLE_PATH/Contents/Resources/" 2>/dev/null || true
 cp Resources/config-example.json "$BUNDLE_PATH/Contents/Resources/" 2>/dev/null || true
+
+# Ad-hoc sign so macOS can persistently identify the app for permissions
+codesign --force --deep --sign - "$BUNDLE_PATH" 2>&1
 
 echo ""
 echo "Installed to: $BUNDLE_PATH"

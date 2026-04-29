@@ -8,8 +8,10 @@ class DragDetector {
     var onDragCancelled: (() -> Void)?
     var isEnabled: Bool = true
 
-    private var eventTap: CFMachPort?
-    private var runLoopSource: CFRunLoopSource?
+    private var mouseDownMonitor: Any?
+    private var mouseDragMonitor: Any?
+    private var mouseUpMonitor: Any?
+
     private var dragState: DragState = .idle
     private var trackedWindow: AXUIElement?
     private var lastWindowPosition: CGPoint = .zero
@@ -18,149 +20,121 @@ class DragDetector {
 
     private enum DragState {
         case idle
-        case watching       // mouse is down, checking for window movement each drag event
-        case dragging       // confirmed window drag, overlays shown
+        case watching
+        case dragging
     }
 
-    // Prevent deallocation while event tap holds a reference
-    private var retainedSelf: Unmanaged<DragDetector>?
-
     func start() {
-        let mask: CGEventMask = (1 << CGEventType.leftMouseDown.rawValue) |
-                                (1 << CGEventType.leftMouseDragged.rawValue) |
-                                (1 << CGEventType.leftMouseUp.rawValue)
+        let ownPID = ProcessInfo.processInfo.processIdentifier
 
-        // Use passRetained so the event tap callback always has a valid reference
-        retainedSelf = Unmanaged.passRetained(self)
-        let refcon = retainedSelf!.toOpaque()
-
-        guard let tap = CGEvent.tapCreate(
-            tap: .cgSessionEventTap,
-            place: .headInsertEventTap,
-            options: .listenOnly,
-            eventsOfInterest: mask,
-            callback: { (proxy, type, event, refcon) -> Unmanaged<CGEvent>? in
-                guard let refcon = refcon else { return Unmanaged.passUnretained(event) }
-                let detector = Unmanaged<DragDetector>.fromOpaque(refcon).takeUnretainedValue()
-                detector.handleEvent(type: type, event: event)
-                return Unmanaged.passUnretained(event)
-            },
-            userInfo: refcon
-        ) else {
-            NSLog("ScreenDivider: FAILED to create event tap")
-            return
+        mouseDownMonitor = NSEvent.addGlobalMonitorForEvents(matching: .leftMouseDown) { [weak self] event in
+            self?.handleMouseDown(event: event, ownPID: ownPID)
         }
 
-        eventTap = tap
-        runLoopSource = CFMachPortCreateRunLoopSource(nil, tap, 0)
-        CFRunLoopAddSource(CFRunLoopGetMain(), runLoopSource, .commonModes)
-        CGEvent.tapEnable(tap: tap, enable: true)
+        mouseDragMonitor = NSEvent.addGlobalMonitorForEvents(matching: .leftMouseDragged) { [weak self] event in
+            self?.handleMouseDragged(event: event)
+        }
+
+        mouseUpMonitor = NSEvent.addGlobalMonitorForEvents(matching: .leftMouseUp) { [weak self] event in
+            self?.handleMouseUp(event: event)
+        }
+
         NSLog("ScreenDivider: Drag detector started")
     }
 
     func stop() {
-        if let tap = eventTap {
-            CGEvent.tapEnable(tap: tap, enable: false)
-        }
-        if let source = runLoopSource {
-            CFRunLoopRemoveSource(CFRunLoopGetMain(), source, .commonModes)
-        }
-        eventTap = nil
-        runLoopSource = nil
+        if let m = mouseDownMonitor { NSEvent.removeMonitor(m) }
+        if let m = mouseDragMonitor { NSEvent.removeMonitor(m) }
+        if let m = mouseUpMonitor { NSEvent.removeMonitor(m) }
+        mouseDownMonitor = nil
+        mouseDragMonitor = nil
+        mouseUpMonitor = nil
         dragState = .idle
-        // Balance the passRetained from start()
-        retainedSelf?.release()
-        retainedSelf = nil
     }
 
-    private func handleEvent(type: CGEventType, event: CGEvent) {
+    // MARK: - Event handlers
+
+    private func handleMouseDown(event: NSEvent, ownPID: Int32) {
         guard isEnabled else { return }
-        let loc = event.location
 
-        switch type {
-        case .leftMouseDown:
-            dragState = .idle
-            trackedWindow = nil
-            dragCheckCount = 0
-            mouseDownPoint = loc
+        dragState = .idle
+        trackedWindow = nil
+        dragCheckCount = 0
 
-            // Get the PID of the frontmost app (ignore our own app)
-            let ownPID = ProcessInfo.processInfo.processIdentifier
+        // NSEvent gives us screen coordinates (flipped); convert to CG coordinates
+        let nsLoc = NSEvent.mouseLocation
+        let cgLoc = cgPoint(from: nsLoc)
+        mouseDownPoint = cgLoc
 
-            // Try the window at the click position first (more reliable than focused window)
-            if let w = getWindowAtPosition(loc), !isOwnWindow(w, ownPID: ownPID),
-               let pos = getWindowPosition(w) {
-                trackedWindow = w
-                lastWindowPosition = pos
-                dragState = .watching
-            } else if let w = getFocusedWindow(), !isOwnWindow(w, ownPID: ownPID),
-                      let pos = getWindowPosition(w) {
-                trackedWindow = w
-                lastWindowPosition = pos
-                dragState = .watching
-            }
-
-        case .leftMouseDragged:
-            guard dragState != .idle, let window = trackedWindow else { return }
-
-            if dragState == .watching {
-                dragCheckCount += 1
-                // Check every 2 events
-                if dragCheckCount % 2 != 0 { return }
-
-                // Check if mouse moved enough
-                let dx = loc.x - mouseDownPoint.x
-                let dy = loc.y - mouseDownPoint.y
-                guard sqrt(dx*dx + dy*dy) > 6 else { return }
-
-                // Check if window position changed
-                guard let currentPos = getWindowPosition(window) else {
-                    dragState = .idle
-                    return
-                }
-                let wdx = currentPos.x - lastWindowPosition.x
-                let wdy = currentPos.y - lastWindowPosition.y
-                if sqrt(wdx*wdx + wdy*wdy) > 3 {
-                    dragState = .dragging
-                    NSLog("ScreenDivider: Window drag detected - showing zones")
-                    DispatchQueue.main.async { [weak self] in
-                        self?.onDragStarted?(window)
-                    }
-                } else if dragCheckCount > 15 {
-                    // Gave it enough chances, not a window drag
-                    dragState = .idle
-                    trackedWindow = nil
-                }
-            }
-
-            if dragState == .dragging {
-                DispatchQueue.main.async { [weak self] in
-                    self?.onDragMoved?(loc)
-                }
-            }
-
-        case .leftMouseUp:
-            if dragState == .dragging, let window = trackedWindow {
-                let pt = loc
-                DispatchQueue.main.async { [weak self] in
-                    self?.onDragEnded?(pt, window)
-                }
-            } else if dragState != .idle {
-                DispatchQueue.main.async { [weak self] in
-                    self?.onDragCancelled?()
-                }
-            }
-            dragState = .idle
-            trackedWindow = nil
-
-        case .tapDisabledByTimeout, .tapDisabledByUserInput:
-            if let tap = eventTap {
-                CGEvent.tapEnable(tap: tap, enable: true)
-            }
-
-        default:
-            break
+        // Try to get the window being clicked
+        if let w = getWindowAtPosition(cgLoc), !isOwnWindow(w, ownPID: ownPID),
+           let pos = getWindowPosition(w) {
+            trackedWindow = w
+            lastWindowPosition = pos
+            dragState = .watching
+        } else if let w = getFocusedWindow(), !isOwnWindow(w, ownPID: ownPID),
+                  let pos = getWindowPosition(w) {
+            trackedWindow = w
+            lastWindowPosition = pos
+            dragState = .watching
         }
+    }
+
+    private func handleMouseDragged(event: NSEvent) {
+        guard isEnabled, dragState != .idle, let window = trackedWindow else { return }
+
+        let nsLoc = NSEvent.mouseLocation
+        let loc = cgPoint(from: nsLoc)
+
+        if dragState == .watching {
+            dragCheckCount += 1
+            if dragCheckCount % 2 != 0 { return }
+
+            let dx = loc.x - mouseDownPoint.x
+            let dy = loc.y - mouseDownPoint.y
+            guard sqrt(dx*dx + dy*dy) > 6 else { return }
+
+            guard let currentPos = getWindowPosition(window) else {
+                dragState = .idle
+                return
+            }
+            let wdx = currentPos.x - lastWindowPosition.x
+            let wdy = currentPos.y - lastWindowPosition.y
+            if sqrt(wdx*wdx + wdy*wdy) > 3 {
+                dragState = .dragging
+                onDragStarted?(window)
+            } else if dragCheckCount > 15 {
+                dragState = .idle
+                trackedWindow = nil
+            }
+        }
+
+        if dragState == .dragging {
+            onDragMoved?(loc)
+        }
+    }
+
+    private func handleMouseUp(event: NSEvent) {
+        guard isEnabled else { return }
+
+        let nsLoc = NSEvent.mouseLocation
+        let loc = cgPoint(from: nsLoc)
+
+        if dragState == .dragging, let window = trackedWindow {
+            onDragEnded?(loc, window)
+        } else if dragState != .idle {
+            onDragCancelled?()
+        }
+        dragState = .idle
+        trackedWindow = nil
+    }
+
+    // MARK: - Coordinate conversion
+
+    /// Convert NSEvent screen coordinates (origin bottom-left) to CG coordinates (origin top-left)
+    private func cgPoint(from nsPoint: NSPoint) -> CGPoint {
+        guard let mainScreen = NSScreen.screens.first else { return CGPoint(x: nsPoint.x, y: nsPoint.y) }
+        return CGPoint(x: nsPoint.x, y: mainScreen.frame.height - nsPoint.y)
     }
 
     // MARK: - Accessibility helpers
@@ -191,7 +165,6 @@ class DragDetector {
         guard AXUIElementCopyElementAtPosition(systemWide, Float(point.x), Float(point.y), &element) == .success,
               let el = element else { return nil }
 
-        // Walk up to find the window
         var current: AXUIElement = el
         for _ in 0..<10 {
             var role: AnyObject?
