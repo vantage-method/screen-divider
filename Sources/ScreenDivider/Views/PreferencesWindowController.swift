@@ -3,6 +3,7 @@ import AppKit
 class PreferencesWindowController: NSObject, NSWindowDelegate {
     private var window: NSWindow!
     private var screenPicker: NSPopUpButton!
+    private var presetPicker: NSPopUpButton!
     private var splitView: SplitEditorView!
     private var instructionLabel: NSTextField!
     private var splitHBtn: NSButton!
@@ -10,6 +11,9 @@ class PreferencesWindowController: NSObject, NSWindowDelegate {
     private var splitH3Btn: NSButton!
     private var splitV3Btn: NSButton!
     private var removeBtn: NSButton!
+    private var undoBtn: NSButton!
+    private var savePresetBtn: NSButton!
+    private var deletePresetBtn: NSButton!
 
     private var config: ScreenDividerConfig
     private let configManager: ConfigManager
@@ -28,25 +32,35 @@ class PreferencesWindowController: NSObject, NSWindowDelegate {
         buildWindow()
     }
 
-    func showWindow() {
+    func showWindow(selectScreenIndex: Int = 0) {
         willOpen?()
         window.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
-        loadScreen(at: 0)
+        let idx = min(selectScreenIndex, config.screens.count - 1)
+        screenPicker.selectItem(at: max(idx, 0))
+        loadScreen(at: max(idx, 0))
+    }
+
+    func refreshConfig(_ newConfig: ScreenDividerConfig) {
+        self.config = newConfig
+        ensureAllScreens()
+        screenPicker.removeAllItems()
+        for layout in config.screens {
+            screenPicker.addItem(withTitle: layout.screenName)
+        }
+        rebuildPresetPicker()
     }
 
     private func ensureAllScreens() {
+        let connectedNames = Set(NSScreen.screens.map { $0.localizedName })
+        config.screens.removeAll { !connectedNames.contains($0.screenName) }
         for screen in NSScreen.screens {
             let name = screen.localizedName
             if !config.screens.contains(where: { $0.screenName == name }) {
-                let root: SplitNode = config.screens.first?.root ??
-                    .split(direction: .vertical, ratio: 0.5,
-                           first: .zone(label: "1"), second: .zone(label: "2"))
-                config.screens.append(ScreenLayout(screenName: name, root: root))
+                let defaultRoot: SplitNode = .split(direction: .vertical, ratio: 0.5,
+                    first: .zone(label: "1"), second: .zone(label: "2"))
+                config.screens.append(ScreenLayout(screenName: name, root: defaultRoot))
             }
-        }
-        if config.screens.isEmpty {
-            config.screens.append(ScreenLayout(screenName: "default", root: .zone(label: "1")))
         }
     }
 
@@ -55,21 +69,103 @@ class PreferencesWindowController: NSObject, NSWindowDelegate {
         onConfigChanged?(config)
     }
 
+    // MARK: - Presets
+
+    private func rebuildPresetPicker() {
+        presetPicker.removeAllItems()
+        presetPicker.addItem(withTitle: "Presets...")
+        presetPicker.menu?.addItem(.separator())
+        for preset in config.presets ?? [] {
+            presetPicker.addItem(withTitle: preset.name)
+        }
+        presetPicker.selectItem(at: 0)
+        deletePresetBtn.isEnabled = false
+    }
+
+    @objc private func presetSelected() {
+        let idx = presetPicker.indexOfSelectedItem
+        // Account for header item + separator
+        let presetIdx = idx - 2
+        guard presetIdx >= 0, let presets = config.presets, presetIdx < presets.count else {
+            deletePresetBtn.isEnabled = false
+            return
+        }
+        let preset = presets[presetIdx]
+        splitView.pushUndo()
+        splitView.root = preset.root
+        splitView.selectedPaths = []
+        splitView.renumberAll()
+        splitView.onTreeChanged?(splitView.root)
+        config.screens[selectedScreenIndex].root = splitView.root
+        autoSave()
+        updateButtons()
+        deletePresetBtn.isEnabled = true
+    }
+
+    @objc private func savePreset() {
+        let alert = NSAlert()
+        alert.messageText = "Save Preset"
+        alert.informativeText = "Enter a name for this layout preset:"
+        alert.addButton(withTitle: "Save")
+        alert.addButton(withTitle: "Cancel")
+
+        let input = NSTextField(frame: NSRect(x: 0, y: 0, width: 250, height: 24))
+        input.stringValue = "\(config.screens[selectedScreenIndex].screenName) layout"
+        alert.accessoryView = input
+        alert.window.initialFirstResponder = input
+
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+        let name = input.stringValue.trimmingCharacters(in: .whitespaces)
+        guard !name.isEmpty else { return }
+
+        let preset = LayoutPreset(name: name, root: config.screens[selectedScreenIndex].root)
+        if config.presets == nil { config.presets = [] }
+        // Replace existing preset with same name, or append
+        if let existing = config.presets!.firstIndex(where: { $0.name == name }) {
+            config.presets![existing] = preset
+        } else {
+            config.presets!.append(preset)
+        }
+        autoSave()
+        rebuildPresetPicker()
+    }
+
+    @objc private func deletePreset() {
+        let idx = presetPicker.indexOfSelectedItem - 2
+        guard idx >= 0, config.presets != nil, idx < config.presets!.count else { return }
+        let name = config.presets![idx].name
+
+        let alert = NSAlert()
+        alert.messageText = "Delete Preset"
+        alert.informativeText = "Delete preset \"\(name)\"?"
+        alert.addButton(withTitle: "Delete")
+        alert.addButton(withTitle: "Cancel")
+        alert.alertStyle = .warning
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+
+        config.presets!.remove(at: idx)
+        if config.presets!.isEmpty { config.presets = nil }
+        autoSave()
+        rebuildPresetPicker()
+    }
+
+    // MARK: - Build Window
+
     private func buildWindow() {
         window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 640, height: 500),
+            contentRect: NSRect(x: 0, y: 0, width: 640, height: 520),
             styleMask: [.titled, .closable, .resizable],
             backing: .buffered, defer: false)
         window.title = "Screen Divider — Layout Editor"
         window.center()
         window.delegate = self
-        window.isReleasedWhenClosed = false  // Prevent deallocation on close
-        window.minSize = NSSize(width: 540, height: 420)
+        window.isReleasedWhenClosed = false
+        window.minSize = NSSize(width: 600, height: 440)
 
         let content = window.contentView!
         let m: CGFloat = 16
 
-        // Screen picker
+        // Row 1: Screen picker
         let screenLabel = NSTextField(labelWithString: "Screen:")
         screenLabel.font = NSFont.systemFont(ofSize: 13, weight: .medium)
         screenLabel.translatesAutoresizingMaskIntoConstraints = false
@@ -84,8 +180,23 @@ class PreferencesWindowController: NSObject, NSWindowDelegate {
         screenPicker.action = #selector(screenChanged)
         content.addSubview(screenPicker)
 
+        // Row 1 right side: Preset picker + save/delete
+        presetPicker = NSPopUpButton()
+        presetPicker.translatesAutoresizingMaskIntoConstraints = false
+        presetPicker.target = self
+        presetPicker.action = #selector(presetSelected)
+        content.addSubview(presetPicker)
+        rebuildPresetPicker()
+
+        savePresetBtn = makeBtn("Save...", #selector(savePreset))
+        content.addSubview(savePresetBtn)
+
+        deletePresetBtn = makeBtn("Delete", #selector(deletePreset))
+        deletePresetBtn.isEnabled = false
+        content.addSubview(deletePresetBtn)
+
         // Instructions
-        instructionLabel = NSTextField(labelWithString: "Click a zone, then split or merge it. Changes apply instantly.")
+        instructionLabel = NSTextField(labelWithString: "Click a zone to select. Shift-click to multi-select. Cmd+Z to undo.")
         instructionLabel.font = NSFont.systemFont(ofSize: 12)
         instructionLabel.textColor = .secondaryLabelColor
         instructionLabel.translatesAutoresizingMaskIntoConstraints = false
@@ -94,7 +205,7 @@ class PreferencesWindowController: NSObject, NSWindowDelegate {
         // Split editor
         splitView = SplitEditorView()
         splitView.translatesAutoresizingMaskIntoConstraints = false
-        splitView.onSelectionChanged = { [weak self] has in self?.updateButtons(has) }
+        splitView.onSelectionChanged = { [weak self] in self?.updateButtons() }
         splitView.onTreeChanged = { [weak self] newRoot in
             guard let self = self else { return }
             self.config.screens[self.selectedScreenIndex].root = newRoot
@@ -102,32 +213,48 @@ class PreferencesWindowController: NSObject, NSWindowDelegate {
         }
         content.addSubview(splitView)
 
-        // Buttons
+        // Bottom buttons
         splitHBtn = makeBtn("Split \u{2500} Half", #selector(doSplitH2))
         splitVBtn = makeBtn("Split \u{2502} Half", #selector(doSplitV2))
         splitH3Btn = makeBtn("Split \u{2500} Thirds", #selector(doSplitH3))
         splitV3Btn = makeBtn("Split \u{2502} Thirds", #selector(doSplitV3))
         removeBtn = makeBtn("Merge Back", #selector(doRemove))
+        undoBtn = makeBtn("Undo", #selector(doUndo))
+        undoBtn.keyEquivalent = "z"
+        undoBtn.keyEquivalentModifierMask = .command
+        undoBtn.isEnabled = false
 
-        for b in [splitHBtn!, splitVBtn!, splitH3Btn!, splitV3Btn!, removeBtn!] {
-            b.isEnabled = false
+        for b in [splitHBtn!, splitVBtn!, splitH3Btn!, splitV3Btn!, removeBtn!, undoBtn!] {
+            if b !== undoBtn { b.isEnabled = false }
             content.addSubview(b)
         }
 
         NSLayoutConstraint.activate([
+            // Row 1: Screen + Presets
             screenLabel.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: m),
             screenLabel.topAnchor.constraint(equalTo: content.topAnchor, constant: m),
             screenPicker.leadingAnchor.constraint(equalTo: screenLabel.trailingAnchor, constant: 8),
             screenPicker.centerYAnchor.constraint(equalTo: screenLabel.centerYAnchor),
 
+            deletePresetBtn.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -m),
+            deletePresetBtn.centerYAnchor.constraint(equalTo: screenLabel.centerYAnchor),
+            savePresetBtn.trailingAnchor.constraint(equalTo: deletePresetBtn.leadingAnchor, constant: -4),
+            savePresetBtn.centerYAnchor.constraint(equalTo: screenLabel.centerYAnchor),
+            presetPicker.trailingAnchor.constraint(equalTo: savePresetBtn.leadingAnchor, constant: -6),
+            presetPicker.centerYAnchor.constraint(equalTo: screenLabel.centerYAnchor),
+            presetPicker.widthAnchor.constraint(greaterThanOrEqualToConstant: 120),
+
+            // Instructions
             instructionLabel.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: m),
             instructionLabel.topAnchor.constraint(equalTo: screenLabel.bottomAnchor, constant: 6),
 
+            // Split editor
             splitView.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: m),
             splitView.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -m),
             splitView.topAnchor.constraint(equalTo: instructionLabel.bottomAnchor, constant: 10),
             splitView.bottomAnchor.constraint(equalTo: splitHBtn!.topAnchor, constant: -14),
 
+            // Bottom row
             splitHBtn!.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: m),
             splitHBtn!.bottomAnchor.constraint(equalTo: content.bottomAnchor, constant: -m),
             splitVBtn!.leadingAnchor.constraint(equalTo: splitHBtn!.trailingAnchor, constant: 6),
@@ -136,6 +263,8 @@ class PreferencesWindowController: NSObject, NSWindowDelegate {
             splitH3Btn!.bottomAnchor.constraint(equalTo: content.bottomAnchor, constant: -m),
             splitV3Btn!.leadingAnchor.constraint(equalTo: splitH3Btn!.trailingAnchor, constant: 6),
             splitV3Btn!.bottomAnchor.constraint(equalTo: content.bottomAnchor, constant: -m),
+            undoBtn!.trailingAnchor.constraint(equalTo: removeBtn!.leadingAnchor, constant: -6),
+            undoBtn!.bottomAnchor.constraint(equalTo: content.bottomAnchor, constant: -m),
             removeBtn!.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -m),
             removeBtn!.bottomAnchor.constraint(equalTo: content.bottomAnchor, constant: -m),
         ])
@@ -150,26 +279,31 @@ class PreferencesWindowController: NSObject, NSWindowDelegate {
         return b
     }
 
-    private func updateButtons(_ hasSelection: Bool) {
-        let canMerge = hasSelection && (splitView.selectedPath?.count ?? 0) > 0
-        for b in [splitHBtn!, splitVBtn!, splitH3Btn!, splitV3Btn!] { b.isEnabled = hasSelection }
+    private func updateButtons() {
+        let count = splitView.selectedPaths.count
+        let singleSelected = count == 1
+        let canMerge = count >= 1 && splitView.canMergeSelected()
+        for b in [splitHBtn!, splitVBtn!, splitH3Btn!, splitV3Btn!] { b.isEnabled = singleSelected }
         removeBtn.isEnabled = canMerge
+        undoBtn.isEnabled = splitView.canUndo
     }
 
     private func loadScreen(at index: Int) {
         guard index >= 0 && index < config.screens.count else { return }
         selectedScreenIndex = index
         splitView.root = config.screens[index].root
-        splitView.selectedPath = nil
-        updateButtons(false)
+        splitView.selectedPaths = []
+        splitView.clearUndo()
+        updateButtons()
     }
 
     @objc private func screenChanged() { loadScreen(at: screenPicker.indexOfSelectedItem) }
-    @objc private func doSplitH2() { splitView.splitSelected(direction: .horizontal, parts: 2); updateButtons(splitView.selectedPath != nil) }
-    @objc private func doSplitV2() { splitView.splitSelected(direction: .vertical, parts: 2); updateButtons(splitView.selectedPath != nil) }
-    @objc private func doSplitH3() { splitView.splitSelected(direction: .horizontal, parts: 3); updateButtons(splitView.selectedPath != nil) }
-    @objc private func doSplitV3() { splitView.splitSelected(direction: .vertical, parts: 3); updateButtons(splitView.selectedPath != nil) }
-    @objc private func doRemove() { splitView.removeSelected(); updateButtons(splitView.selectedPath != nil) }
+    @objc private func doSplitH2() { splitView.splitSelected(direction: .horizontal, parts: 2); updateButtons() }
+    @objc private func doSplitV2() { splitView.splitSelected(direction: .vertical, parts: 2); updateButtons() }
+    @objc private func doSplitH3() { splitView.splitSelected(direction: .horizontal, parts: 3); updateButtons() }
+    @objc private func doSplitV3() { splitView.splitSelected(direction: .vertical, parts: 3); updateButtons() }
+    @objc private func doRemove() { splitView.removeSelected(); updateButtons() }
+    @objc private func doUndo() { splitView.undo(); updateButtons() }
 
     func windowWillClose(_ notification: Notification) { didClose?() }
 }
@@ -178,11 +312,35 @@ class PreferencesWindowController: NSObject, NSWindowDelegate {
 
 class SplitEditorView: NSView {
     var root: SplitNode = .zone(label: "1") { didSet { needsDisplay = true } }
-    var selectedPath: [Int]? = nil { didSet { needsDisplay = true } }
-    var onSelectionChanged: ((Bool) -> Void)?
+    var selectedPaths: [[Int]] = [] { didSet { needsDisplay = true } }
+    var onSelectionChanged: (() -> Void)?
     var onTreeChanged: ((SplitNode) -> Void)?
 
+    private var undoStack: [SplitNode] = []
+    var canUndo: Bool { !undoStack.isEmpty }
+
     override var acceptsFirstResponder: Bool { true }
+
+    // MARK: - Undo
+
+    func pushUndo() {
+        undoStack.append(root)
+        if undoStack.count > 50 { undoStack.removeFirst() }
+    }
+
+    func clearUndo() {
+        undoStack.removeAll()
+    }
+
+    func undo() {
+        guard let previous = undoStack.popLast() else { return }
+        root = previous
+        selectedPaths = []
+        onTreeChanged?(root)
+        onSelectionChanged?()
+    }
+
+    // MARK: - Drawing
 
     override func draw(_ dirtyRect: NSRect) {
         let area = bounds.insetBy(dx: 1, dy: 1)
@@ -196,7 +354,7 @@ class SplitEditorView: NSView {
     private func drawNode(_ node: SplitNode, in rect: CGRect, path: [Int]) {
         switch node {
         case .zone(let label):
-            let isSel = selectedPath != nil && path == selectedPath!
+            let isSel = selectedPaths.contains(path)
             let r = rect.insetBy(dx: 2, dy: 2)
 
             (isSel ? NSColor.controlAccentColor.withAlphaComponent(0.3) : NSColor.controlAccentColor.withAlphaComponent(0.08)).setFill()
@@ -236,11 +394,40 @@ class SplitEditorView: NSView {
         }
     }
 
+    // MARK: - Mouse handling
+
     override func mouseDown(with event: NSEvent) {
         window?.makeFirstResponder(self)
         let pt = convert(event.locationInWindow, from: nil)
-        selectedPath = findZone(root, pt, bounds.insetBy(dx: 2, dy: 2), [])
-        onSelectionChanged?(selectedPath != nil)
+        guard let clicked = findZone(root, pt, bounds.insetBy(dx: 2, dy: 2), []) else {
+            selectedPaths = []
+            onSelectionChanged?()
+            return
+        }
+
+        if event.modifierFlags.contains(.shift) && !selectedPaths.isEmpty {
+            // Shift-click: expand selection to cover clicked zone too.
+            // Find the LCA of existing selection + new click, then select ALL
+            // zones under that LCA so it forms a valid mergeable region.
+            var anchors = selectedPaths
+            if !anchors.contains(clicked) {
+                anchors.append(clicked)
+            } else {
+                // Shift-clicking an already-selected zone: deselect by
+                // shrinking back to just the other anchor zones that were
+                // explicitly clicked. For simplicity, just deselect all.
+                selectedPaths = []
+                onSelectionChanged?()
+                return
+            }
+            let lca = lowestCommonAncestor(anchors)
+            if let lcaNode = getNode(at: lca) {
+                selectedPaths = allLeafPaths(node: lcaNode, basePath: lca)
+            }
+        } else {
+            selectedPaths = [clicked]
+        }
+        onSelectionChanged?()
     }
 
     private func findZone(_ node: SplitNode, _ pt: CGPoint, _ rect: CGRect, _ path: [Int]) -> [Int]? {
@@ -252,15 +439,48 @@ class SplitEditorView: NSView {
         }
     }
 
-    // MARK: - Split (halves or thirds)
+    // MARK: - Merge helpers
+
+    private func lowestCommonAncestor(_ paths: [[Int]]) -> [Int] {
+        guard let first = paths.first else { return [] }
+        var lca = first
+        for path in paths.dropFirst() {
+            var common: [Int] = []
+            for (a, b) in zip(lca, path) {
+                if a == b { common.append(a) } else { break }
+            }
+            lca = common
+        }
+        return lca
+    }
+
+    private func allLeafPaths(node: SplitNode, basePath: [Int]) -> [[Int]] {
+        switch node {
+        case .zone:
+            return [basePath]
+        case .split(_, _, let f, let s):
+            return allLeafPaths(node: f, basePath: basePath + [0]) +
+                   allLeafPaths(node: s, basePath: basePath + [1])
+        }
+    }
+
+    func canMergeSelected() -> Bool {
+        if selectedPaths.count == 1 {
+            return selectedPaths[0].count > 0
+        }
+        // Multi-select always forms a valid LCA group (auto-expanded on click)
+        return selectedPaths.count >= 2
+    }
+
+    // MARK: - Split
 
     func splitSelected(direction: SplitDirection, parts: Int) {
-        guard let path = selectedPath, let node = getNode(at: path) else { return }
-        guard case .zone = node else { return }
+        guard selectedPaths.count == 1, let path = selectedPaths.first,
+              let node = getNode(at: path), case .zone = node else { return }
 
+        pushUndo()
         let newNode: SplitNode
         if parts == 3 {
-            // Split into 3: first split at 1/3, then split the second part at 1/2 (which gives 1/3 + 1/3 + 1/3)
             newNode = .split(direction: direction, ratio: 1.0/3.0,
                 first: .zone(label: "a"),
                 second: .split(direction: direction, ratio: 0.5,
@@ -275,25 +495,44 @@ class SplitEditorView: NSView {
         root = setNode(at: path, to: newNode)
         renumberAll()
         onTreeChanged?(root)
-        selectedPath = path + [0]
-        onSelectionChanged?(true)
+        selectedPaths = [path + [0]]
+        onSelectionChanged?()
     }
 
+    // MARK: - Merge
+
     func removeSelected() {
-        guard let path = selectedPath, !path.isEmpty else { return }
-        let parentPath = Array(path.dropLast())
-        guard let parent = getNode(at: parentPath) else { return }
-        if case .split(_, _, let f, let s) = parent {
-            let keep = path.last! == 0 ? s : f
-            root = setNode(at: parentPath, to: keep)
+        pushUndo()
+
+        if selectedPaths.count == 1 {
+            // Single selection: merge with sibling
+            let path = selectedPaths[0]
+            guard !path.isEmpty else { undoStack.removeLast(); return }
+            let parentPath = Array(path.dropLast())
+            guard let parent = getNode(at: parentPath) else { undoStack.removeLast(); return }
+            if case .split(_, _, let f, let s) = parent {
+                let keep = path.last! == 0 ? s : f
+                root = setNode(at: parentPath, to: keep)
+                renumberAll()
+                onTreeChanged?(root)
+                selectedPaths = []
+                onSelectionChanged?()
+            }
+        } else if selectedPaths.count >= 2 {
+            // Multi-select: selection is always a complete LCA subtree,
+            // so replace the LCA with a single zone
+            let lca = lowestCommonAncestor(selectedPaths)
+            root = setNode(at: lca, to: .zone(label: "1"))
             renumberAll()
             onTreeChanged?(root)
-            selectedPath = nil
-            onSelectionChanged?(false)
+            selectedPaths = [lca]
+            onSelectionChanged?()
         }
     }
 
-    private func renumberAll() {
+    // MARK: - Tree utilities
+
+    func renumberAll() {
         var n = 1
         root = renum(root, &n)
     }

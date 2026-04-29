@@ -1,0 +1,4 @@
+.build/
+/ScreenDivider
+*.o
+.DS_Store

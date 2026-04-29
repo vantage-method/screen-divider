@@ -1,4 +1,4 @@
-import Foundation
+import AppKit
 
 class ConfigManager {
     static let configDirectory = FileManager.default.homeDirectoryForCurrentUser
@@ -11,7 +11,28 @@ class ConfigManager {
     func load() -> ScreenDividerConfig? {
         do {
             let data = try Data(contentsOf: Self.configFileURL)
-            let config = try JSONDecoder().decode(ScreenDividerConfig.self, from: data)
+            var config = try JSONDecoder().decode(ScreenDividerConfig.self, from: data)
+
+            // Only keep screens that are currently connected
+            let connectedNames = Set(NSScreen.screens.map { $0.localizedName })
+            let before = config.screens.count
+            config.screens.removeAll { !connectedNames.contains($0.screenName) }
+
+            // Add any newly connected screens with a simple default layout
+            for screen in NSScreen.screens {
+                let name = screen.localizedName
+                if !config.screens.contains(where: { $0.screenName == name }) {
+                    let defaultRoot: SplitNode = .split(direction: .vertical, ratio: 0.5,
+                        first: .zone(label: "1"), second: .zone(label: "2"))
+                    config.screens.append(ScreenLayout(screenName: name, root: defaultRoot))
+                }
+            }
+
+            // Persist if we cleaned up stale or added new screens
+            if config.screens.count != before {
+                save(config)
+            }
+
             return config
         } catch {
             NSLog("ScreenDivider: Failed to load config: \(error)")
@@ -32,25 +53,17 @@ class ConfigManager {
             try? fm.createDirectory(at: Self.configDirectory, withIntermediateDirectories: true)
         }
         if !fm.fileExists(atPath: Self.configFileURL.path) {
-            let defaultConfig = ScreenDividerConfig(screens: [
-                ScreenLayout(screenName: "default", root:
-                    .split(direction: .vertical, ratio: 0.5,
-                        first: .split(direction: .horizontal, ratio: 0.333,
-                            first: .split(direction: .vertical, ratio: 0.5,
-                                first: .zone(label: "1"),
-                                second: .zone(label: "2")),
-                            second: .split(direction: .horizontal, ratio: 0.5,
-                                first: .split(direction: .vertical, ratio: 0.5,
-                                    first: .zone(label: "3"),
-                                    second: .zone(label: "4")),
-                                second: .split(direction: .vertical, ratio: 0.5,
-                                    first: .zone(label: "5"),
-                                    second: .zone(label: "6")))),
-                        second: .split(direction: .horizontal, ratio: 0.5,
-                            first: .zone(label: "7"),
-                            second: .zone(label: "8")))
-                )
-            ])
+            let defaultRoot: SplitNode = .split(direction: .vertical, ratio: 0.5,
+                first: .split(direction: .horizontal, ratio: 0.5,
+                    first: .zone(label: "1"), second: .zone(label: "2")),
+                second: .split(direction: .horizontal, ratio: 0.5,
+                    first: .zone(label: "3"), second: .zone(label: "4")))
+
+            // Create an entry for each connected screen
+            let screens = NSScreen.screens.map { ScreenLayout(screenName: $0.localizedName, root: defaultRoot) }
+            let defaultConfig = ScreenDividerConfig(screens: screens.isEmpty
+                ? [ScreenLayout(screenName: "Display", root: defaultRoot)]
+                : screens)
             save(defaultConfig)
         }
     }

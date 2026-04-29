@@ -96,10 +96,11 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         let menu = NSMenu()
 
         if let config = currentConfig {
-            for layout in config.screens {
+            for (index, layout) in config.screens.enumerated() {
                 let count = layout.root.zoneCount
-                let item = NSMenuItem(title: "\(layout.screenName) — \(count) zones", action: nil, keyEquivalent: "")
-                item.isEnabled = false
+                let item = NSMenuItem(title: "\(layout.screenName) — \(count) zones", action: #selector(openPreferencesForScreen(_:)), keyEquivalent: "")
+                item.target = self
+                item.tag = index
                 menu.addItem(item)
             }
         }
@@ -133,9 +134,30 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         sender.state = dragDetector.isEnabled ? .on : .off
     }
 
+    @objc private func openPreferencesForScreen(_ sender: NSMenuItem) {
+        showPreferences(selectScreenIndex: sender.tag)
+    }
+
     @objc private func openPreferences() {
+        showPreferences(selectScreenIndex: nil)
+    }
+
+    private func showPreferences(selectScreenIndex: Int?) {
+        // Determine which screen to select: explicit choice, or auto-detect from mouse location
+        let screenIndex: Int
+        if let explicit = selectScreenIndex {
+            screenIndex = explicit
+        } else if let config = currentConfig {
+            let mouseScreen = NSScreen.screens.first(where: { NSMouseInRect(NSEvent.mouseLocation, $0.frame, false) })
+            let mouseName = mouseScreen?.localizedName ?? NSScreen.main?.localizedName ?? ""
+            screenIndex = config.screens.firstIndex(where: { $0.screenName == mouseName }) ?? 0
+        } else {
+            screenIndex = 0
+        }
+
         if let existing = preferencesController {
-            existing.showWindow()
+            existing.refreshConfig(configManager.load() ?? ScreenDividerConfig(screens: []))
+            existing.showWindow(selectScreenIndex: screenIndex)
             return
         }
 
@@ -143,17 +165,15 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         let controller = PreferencesWindowController(
             configManager: configManager, config: config,
             onConfigChanged: { [weak self] config in
-                // Apply immediately — no need to wait for file watcher
                 self?.currentConfig = config
                 self?.statusItem.menu = self?.buildMenu()
             })
         controller.willOpen = { [weak self] in self?.dragDetector.isEnabled = false }
         controller.didClose = { [weak self] in
             self?.dragDetector.isEnabled = true
-            // Don't nil out preferencesController here — it gets reused
         }
         preferencesController = controller
-        controller.showWindow()
+        controller.showWindow(selectScreenIndex: screenIndex)
     }
 
     @objc private func toggleLogin(_ sender: NSMenuItem) {

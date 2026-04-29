@@ -4,12 +4,18 @@ import Foundation
 
 struct ScreenDividerConfig: Codable {
     var screens: [ScreenLayout]
+    var presets: [LayoutPreset]?
 
     /// Find layout for a given screen, or fall back to first
     func layout(for screenName: String) -> ScreenLayout? {
         return screens.first(where: { $0.screenName == screenName })
             ?? screens.first
     }
+}
+
+struct LayoutPreset: Codable {
+    var name: String
+    var root: SplitNode
 }
 
 struct ScreenLayout: Codable {
