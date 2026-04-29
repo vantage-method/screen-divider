@@ -22,6 +22,17 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
 
+        // Set app icon (shown in preferences window, Force Quit, Activity Monitor, Finder)
+        let execURL = URL(fileURLWithPath: ProcessInfo.processInfo.arguments[0])
+        let resourceDir = execURL.deletingLastPathComponent().appendingPathComponent("Resources")
+        for name in ["AppIcon.icns", "app-icon@2x.png", "app-icon.png"] {
+            let url = resourceDir.appendingPathComponent(name)
+            if let icon = NSImage(contentsOf: url) {
+                NSApp.applicationIconImage = icon
+                break
+            }
+        }
+
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
         if let button = statusItem.button { button.title = "SD" }
 
@@ -49,9 +60,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                 }
             }
 
-            if let img = NSImage(systemSymbolName: "rectangle.split.3x3", accessibilityDescription: "Screen Divider") {
-                img.size = NSSize(width: 18, height: 18)
-                statusItem.button?.image = img
+            if let iconImage = loadMenuBarIcon() {
+                iconImage.isTemplate = true
+                statusItem.button?.image = iconImage
                 statusItem.button?.title = ""
             }
 
@@ -71,6 +82,43 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             }
             configManager.startWatching()
         }
+    }
+
+    private func loadMenuBarIcon() -> NSImage? {
+        let execURL = URL(fileURLWithPath: ProcessInfo.processInfo.arguments[0])
+        let resourceDir = execURL.deletingLastPathComponent().appendingPathComponent("Resources")
+        let bundleResourceDir = Bundle.main.resourceURL
+
+        // Build a multi-representation image for crisp rendering on all displays
+        let img = NSImage(size: NSSize(width: 16, height: 16))
+        var added = false
+
+        for (suffix, scale) in [("", 1), ("@2x", 2), ("@3x", 3)] {
+            let filename = "menubar-icon\(suffix).png"
+            // Check bundle first, then relative path
+            let candidates = [
+                bundleResourceDir?.appendingPathComponent(filename),
+                resourceDir.appendingPathComponent(filename)
+            ].compactMap { $0 }
+
+            for url in candidates {
+                if let rep = NSImageRep(contentsOf: url) {
+                    rep.size = NSSize(width: 16, height: 16)
+                    rep.pixelsWide = 18 * scale
+                    rep.pixelsHigh = 18 * scale
+                    img.addRepresentation(rep)
+                    added = true
+                    break
+                }
+            }
+        }
+
+        if added { return img }
+
+        // Fallback to SF Symbol
+        let fallback = NSImage(systemSymbolName: "rectangle.split.3x3", accessibilityDescription: "Screen Divider")
+        fallback?.size = NSSize(width: 16, height: 16)
+        return fallback
     }
 
     private func setupDragDetector() {

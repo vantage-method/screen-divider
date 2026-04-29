@@ -5,7 +5,6 @@ class PreferencesWindowController: NSObject, NSWindowDelegate {
     private var screenPicker: NSPopUpButton!
     private var presetPicker: NSPopUpButton!
     private var splitView: SplitEditorView!
-    private var instructionLabel: NSTextField!
     private var splitHBtn: NSButton!
     private var splitVBtn: NSButton!
     private var splitH3Btn: NSButton!
@@ -73,7 +72,7 @@ class PreferencesWindowController: NSObject, NSWindowDelegate {
 
     private func rebuildPresetPicker() {
         presetPicker.removeAllItems()
-        presetPicker.addItem(withTitle: "Presets...")
+        presetPicker.addItem(withTitle: "Presets")
         presetPicker.menu?.addItem(.separator())
         for preset in config.presets ?? [] {
             presetPicker.addItem(withTitle: preset.name)
@@ -84,7 +83,6 @@ class PreferencesWindowController: NSObject, NSWindowDelegate {
 
     @objc private func presetSelected() {
         let idx = presetPicker.indexOfSelectedItem
-        // Account for header item + separator
         let presetIdx = idx - 2
         guard presetIdx >= 0, let presets = config.presets, presetIdx < presets.count else {
             deletePresetBtn.isEnabled = false
@@ -108,19 +106,15 @@ class PreferencesWindowController: NSObject, NSWindowDelegate {
         alert.informativeText = "Enter a name for this layout preset:"
         alert.addButton(withTitle: "Save")
         alert.addButton(withTitle: "Cancel")
-
         let input = NSTextField(frame: NSRect(x: 0, y: 0, width: 250, height: 24))
         input.stringValue = "\(config.screens[selectedScreenIndex].screenName) layout"
         alert.accessoryView = input
         alert.window.initialFirstResponder = input
-
         guard alert.runModal() == .alertFirstButtonReturn else { return }
         let name = input.stringValue.trimmingCharacters(in: .whitespaces)
         guard !name.isEmpty else { return }
-
         let preset = LayoutPreset(name: name, root: config.screens[selectedScreenIndex].root)
         if config.presets == nil { config.presets = [] }
-        // Replace existing preset with same name, or append
         if let existing = config.presets!.firstIndex(where: { $0.name == name }) {
             config.presets![existing] = preset
         } else {
@@ -134,7 +128,6 @@ class PreferencesWindowController: NSObject, NSWindowDelegate {
         let idx = presetPicker.indexOfSelectedItem - 2
         guard idx >= 0, config.presets != nil, idx < config.presets!.count else { return }
         let name = config.presets![idx].name
-
         let alert = NSAlert()
         alert.messageText = "Delete Preset"
         alert.informativeText = "Delete preset \"\(name)\"?"
@@ -142,7 +135,6 @@ class PreferencesWindowController: NSObject, NSWindowDelegate {
         alert.addButton(withTitle: "Cancel")
         alert.alertStyle = .warning
         guard alert.runModal() == .alertFirstButtonReturn else { return }
-
         config.presets!.remove(at: idx)
         if config.presets!.isEmpty { config.presets = nil }
         autoSave()
@@ -153,26 +145,25 @@ class PreferencesWindowController: NSObject, NSWindowDelegate {
 
     private func buildWindow() {
         window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 640, height: 520),
-            styleMask: [.titled, .closable, .resizable],
+            contentRect: NSRect(x: 0, y: 0, width: 560, height: 480),
+            styleMask: [.titled, .closable, .resizable, .fullSizeContentView],
             backing: .buffered, defer: false)
-        window.title = "Screen Divider — Layout Editor"
+        window.title = "Layout Editor"
+        window.titlebarAppearsTransparent = true
+        window.titleVisibility = .visible
         window.center()
         window.delegate = self
         window.isReleasedWhenClosed = false
-        window.minSize = NSSize(width: 600, height: 440)
+        window.minSize = NSSize(width: 440, height: 380)
 
         let content = window.contentView!
-        let m: CGFloat = 16
+        let m: CGFloat = 24
 
-        // Row 1: Screen picker
-        let screenLabel = NSTextField(labelWithString: "Screen:")
-        screenLabel.font = NSFont.systemFont(ofSize: 13, weight: .medium)
-        screenLabel.translatesAutoresizingMaskIntoConstraints = false
-        content.addSubview(screenLabel)
-
+        // ── Row 1: Screen + Presets ──
         screenPicker = NSPopUpButton()
         screenPicker.translatesAutoresizingMaskIntoConstraints = false
+        screenPicker.controlSize = .large
+        screenPicker.font = NSFont.systemFont(ofSize: 13, weight: .medium)
         for layout in config.screens {
             screenPicker.addItem(withTitle: layout.screenName)
         }
@@ -180,29 +171,24 @@ class PreferencesWindowController: NSObject, NSWindowDelegate {
         screenPicker.action = #selector(screenChanged)
         content.addSubview(screenPicker)
 
-        // Row 1 right side: Preset picker + save/delete
         presetPicker = NSPopUpButton()
         presetPicker.translatesAutoresizingMaskIntoConstraints = false
+        presetPicker.controlSize = .large
+        presetPicker.font = NSFont.systemFont(ofSize: 13)
         presetPicker.target = self
         presetPicker.action = #selector(presetSelected)
         content.addSubview(presetPicker)
-        rebuildPresetPicker()
 
-        savePresetBtn = makeBtn("Save...", #selector(savePreset))
+        savePresetBtn = makePillBtn("Save", #selector(savePreset), color: PreferencesWindowController.brandBlue)
         content.addSubview(savePresetBtn)
 
-        deletePresetBtn = makeBtn("Delete", #selector(deletePreset))
+        deletePresetBtn = makePillBtn("Delete", #selector(deletePreset))
         deletePresetBtn.isEnabled = false
         content.addSubview(deletePresetBtn)
 
-        // Instructions
-        instructionLabel = NSTextField(labelWithString: "Click a zone to select. Shift-click to multi-select. Cmd+Z to undo.")
-        instructionLabel.font = NSFont.systemFont(ofSize: 12)
-        instructionLabel.textColor = .secondaryLabelColor
-        instructionLabel.translatesAutoresizingMaskIntoConstraints = false
-        content.addSubview(instructionLabel)
+        rebuildPresetPicker()
 
-        // Split editor
+        // ── Editor (no wrapping card — just the view directly) ──
         splitView = SplitEditorView()
         splitView.translatesAutoresizingMaskIntoConstraints = false
         splitView.onSelectionChanged = { [weak self] in self?.updateButtons() }
@@ -213,71 +199,85 @@ class PreferencesWindowController: NSObject, NSWindowDelegate {
         }
         content.addSubview(splitView)
 
-        // Bottom buttons
-        splitHBtn = makeBtn("Split \u{2500} Half", #selector(doSplitH2))
-        splitVBtn = makeBtn("Split \u{2502} Half", #selector(doSplitV2))
-        splitH3Btn = makeBtn("Split \u{2500} Thirds", #selector(doSplitH3))
-        splitV3Btn = makeBtn("Split \u{2502} Thirds", #selector(doSplitV3))
-        removeBtn = makeBtn("Merge Back", #selector(doRemove))
-        undoBtn = makeBtn("Undo", #selector(doUndo))
+        // ── Bottom buttons ──
+        let blue = PreferencesWindowController.brandBlue
+        let purple = PreferencesWindowController.brandPurple
+
+        splitHBtn = makePillBtn("\u{2500} Half", #selector(doSplitH2), color: blue)
+        splitVBtn = makePillBtn("\u{2502} Half", #selector(doSplitV2), color: purple)
+        splitH3Btn = makePillBtn("\u{2500} Thirds", #selector(doSplitH3), color: blue)
+        splitV3Btn = makePillBtn("\u{2502} Thirds", #selector(doSplitV3), color: purple)
+        removeBtn = makePillBtn("Merge", #selector(doRemove))  // gradient (default)
+        undoBtn = makePillBtn("Undo", #selector(doUndo))
         undoBtn.keyEquivalent = "z"
         undoBtn.keyEquivalentModifierMask = .command
-        undoBtn.isEnabled = false
 
         for b in [splitHBtn!, splitVBtn!, splitH3Btn!, splitV3Btn!, removeBtn!, undoBtn!] {
-            if b !== undoBtn { b.isEnabled = false }
-            content.addSubview(b)
+            b.isEnabled = false
         }
 
+        let spacer = NSView()
+        spacer.translatesAutoresizingMaskIntoConstraints = false
+        spacer.setContentHuggingPriority(.defaultLow, for: .horizontal)
+
+        let btnStack = NSStackView(views: [splitHBtn, splitVBtn, splitH3Btn, splitV3Btn, spacer, removeBtn, undoBtn])
+        btnStack.orientation = .horizontal
+        btnStack.spacing = 8
+        btnStack.translatesAutoresizingMaskIntoConstraints = false
+        content.addSubview(btnStack)
+
+        // ── Hint ──
+        let hint = NSTextField(labelWithString: "Click to select  \u{2022}  Shift-click to multi-select  \u{2022}  \u{2318}Z undo")
+        hint.font = NSFont.systemFont(ofSize: 10)
+        hint.textColor = .tertiaryLabelColor
+        hint.translatesAutoresizingMaskIntoConstraints = false
+        content.addSubview(hint)
+
+        // ── Layout ──
         NSLayoutConstraint.activate([
-            // Row 1: Screen + Presets
-            screenLabel.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: m),
-            screenLabel.topAnchor.constraint(equalTo: content.topAnchor, constant: m),
-            screenPicker.leadingAnchor.constraint(equalTo: screenLabel.trailingAnchor, constant: 8),
-            screenPicker.centerYAnchor.constraint(equalTo: screenLabel.centerYAnchor),
+            // Top row
+            screenPicker.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: m),
+            screenPicker.topAnchor.constraint(equalTo: content.topAnchor, constant: m + 16),
 
             deletePresetBtn.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -m),
-            deletePresetBtn.centerYAnchor.constraint(equalTo: screenLabel.centerYAnchor),
-            savePresetBtn.trailingAnchor.constraint(equalTo: deletePresetBtn.leadingAnchor, constant: -4),
-            savePresetBtn.centerYAnchor.constraint(equalTo: screenLabel.centerYAnchor),
-            presetPicker.trailingAnchor.constraint(equalTo: savePresetBtn.leadingAnchor, constant: -6),
-            presetPicker.centerYAnchor.constraint(equalTo: screenLabel.centerYAnchor),
-            presetPicker.widthAnchor.constraint(greaterThanOrEqualToConstant: 120),
+            deletePresetBtn.centerYAnchor.constraint(equalTo: screenPicker.centerYAnchor),
+            savePresetBtn.trailingAnchor.constraint(equalTo: deletePresetBtn.leadingAnchor, constant: -6),
+            savePresetBtn.centerYAnchor.constraint(equalTo: screenPicker.centerYAnchor),
+            presetPicker.trailingAnchor.constraint(equalTo: savePresetBtn.leadingAnchor, constant: -8),
+            presetPicker.centerYAnchor.constraint(equalTo: screenPicker.centerYAnchor),
 
-            // Instructions
-            instructionLabel.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: m),
-            instructionLabel.topAnchor.constraint(equalTo: screenLabel.bottomAnchor, constant: 6),
-
-            // Split editor
+            // Editor — generous margins, no card wrapper
             splitView.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: m),
             splitView.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -m),
-            splitView.topAnchor.constraint(equalTo: instructionLabel.bottomAnchor, constant: 10),
-            splitView.bottomAnchor.constraint(equalTo: splitHBtn!.topAnchor, constant: -14),
+            splitView.topAnchor.constraint(equalTo: screenPicker.bottomAnchor, constant: 20),
+            splitView.bottomAnchor.constraint(equalTo: btnStack.topAnchor, constant: -20),
 
-            // Bottom row
-            splitHBtn!.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: m),
-            splitHBtn!.bottomAnchor.constraint(equalTo: content.bottomAnchor, constant: -m),
-            splitVBtn!.leadingAnchor.constraint(equalTo: splitHBtn!.trailingAnchor, constant: 6),
-            splitVBtn!.bottomAnchor.constraint(equalTo: content.bottomAnchor, constant: -m),
-            splitH3Btn!.leadingAnchor.constraint(equalTo: splitVBtn!.trailingAnchor, constant: 6),
-            splitH3Btn!.bottomAnchor.constraint(equalTo: content.bottomAnchor, constant: -m),
-            splitV3Btn!.leadingAnchor.constraint(equalTo: splitH3Btn!.trailingAnchor, constant: 6),
-            splitV3Btn!.bottomAnchor.constraint(equalTo: content.bottomAnchor, constant: -m),
-            undoBtn!.trailingAnchor.constraint(equalTo: removeBtn!.leadingAnchor, constant: -6),
-            undoBtn!.bottomAnchor.constraint(equalTo: content.bottomAnchor, constant: -m),
-            removeBtn!.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -m),
-            removeBtn!.bottomAnchor.constraint(equalTo: content.bottomAnchor, constant: -m),
+            // Button row
+            btnStack.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: m),
+            btnStack.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -m),
+            btnStack.bottomAnchor.constraint(equalTo: hint.topAnchor, constant: -12),
+            btnStack.heightAnchor.constraint(equalToConstant: 34),
+
+            // Hint
+            hint.centerXAnchor.constraint(equalTo: content.centerXAnchor),
+            hint.bottomAnchor.constraint(equalTo: content.bottomAnchor, constant: -12),
         ])
     }
 
-    private func makeBtn(_ title: String, _ action: Selector) -> NSButton {
-        let b = NSButton(title: title, target: self, action: action)
-        b.bezelStyle = .rounded
-        b.controlSize = .small
-        b.font = NSFont.systemFont(ofSize: 11)
+    // MARK: - UI Helpers
+
+    private func makePillBtn(_ title: String, _ action: Selector, color: NSColor? = nil) -> NSButton {
+        let b = PillButton(title: title, target: self, action: action)
+        if let c = color { b.solidColor = c }
         b.translatesAutoresizingMaskIntoConstraints = false
+        b.heightAnchor.constraint(equalToConstant: 32).isActive = true
         return b
     }
+
+    // Brand colors matching the app icon gradient
+    static let brandBlue = NSColor(calibratedRed: 0.35, green: 0.45, blue: 0.95, alpha: 1.0)
+    static let brandPurple = NSColor(calibratedRed: 0.55, green: 0.35, blue: 0.90, alpha: 1.0)
+    static let brandPink = NSColor(calibratedRed: 0.85, green: 0.30, blue: 0.65, alpha: 1.0)
 
     private func updateButtons() {
         let count = splitView.selectedPaths.count
@@ -328,9 +328,7 @@ class SplitEditorView: NSView {
         if undoStack.count > 50 { undoStack.removeFirst() }
     }
 
-    func clearUndo() {
-        undoStack.removeAll()
-    }
+    func clearUndo() { undoStack.removeAll() }
 
     func undo() {
         guard let previous = undoStack.popLast() else { return }
@@ -343,12 +341,7 @@ class SplitEditorView: NSView {
     // MARK: - Drawing
 
     override func draw(_ dirtyRect: NSRect) {
-        let area = bounds.insetBy(dx: 1, dy: 1)
-        NSColor.windowBackgroundColor.setFill()
-        NSBezierPath(roundedRect: area, xRadius: 6, yRadius: 6).fill()
-        NSColor.separatorColor.setStroke()
-        NSBezierPath(roundedRect: area, xRadius: 6, yRadius: 6).stroke()
-        drawNode(root, in: area.insetBy(dx: 1, dy: 1), path: [])
+        drawNode(root, in: bounds, path: [])
     }
 
     private func drawNode(_ node: SplitNode, in rect: CGRect, path: [Int]) {
@@ -356,22 +349,43 @@ class SplitEditorView: NSView {
         case .zone(let label):
             let isSel = selectedPaths.contains(path)
             let r = rect.insetBy(dx: 2, dy: 2)
+            let cornerRadius: CGFloat = 6
 
-            (isSel ? NSColor.controlAccentColor.withAlphaComponent(0.3) : NSColor.controlAccentColor.withAlphaComponent(0.08)).setFill()
-            let p = NSBezierPath(roundedRect: r, xRadius: 4, yRadius: 4)
+            // Brand colors
+            let brandPurple = PreferencesWindowController.brandPurple
+
+            // Fill
+            if isSel {
+                brandPurple.withAlphaComponent(0.12).setFill()
+            } else {
+                brandPurple.withAlphaComponent(0.03).setFill()
+            }
+            let p = NSBezierPath(roundedRect: r, xRadius: cornerRadius, yRadius: cornerRadius)
             p.fill()
-            (isSel ? NSColor.controlAccentColor : NSColor.gridColor).setStroke()
-            p.lineWidth = isSel ? 3 : 1
+
+            // Border — thin and subtle
+            if isSel {
+                brandPurple.withAlphaComponent(0.5).setStroke()
+                p.lineWidth = 1.5
+            } else {
+                NSColor.separatorColor.withAlphaComponent(0.2).setStroke()
+                p.lineWidth = 0.5
+            }
             p.stroke()
 
-            let fs = max(10, min(20, min(r.width, r.height) / 3))
+            // Zone label
+            let fs = max(10, min(18, min(r.width, r.height) / 4))
             let attrs: [NSAttributedString.Key: Any] = [
-                .font: NSFont.systemFont(ofSize: fs, weight: isSel ? .bold : .medium),
-                .foregroundColor: isSel ? NSColor.controlAccentColor : NSColor.secondaryLabelColor
+                .font: NSFont.systemFont(ofSize: fs, weight: isSel ? .medium : .regular),
+                .foregroundColor: isSel ? brandPurple.withAlphaComponent(0.7) : NSColor.quaternaryLabelColor
             ]
             let sz = (label as NSString).size(withAttributes: attrs)
-            (label as NSString).draw(in: NSRect(x: r.midX - sz.width/2, y: r.midY - sz.height/2,
-                                                 width: sz.width+2, height: sz.height), withAttributes: attrs)
+            let textRect = NSRect(
+                x: r.midX - sz.width / 2,
+                y: r.midY - sz.height / 2,
+                width: sz.width + 2,
+                height: sz.height)
+            (label as NSString).draw(in: textRect, withAttributes: attrs)
 
         case .split(let dir, let ratio, let first, let second):
             let (r1, r2) = splitRect(rect, direction: dir, ratio: ratio)
@@ -399,23 +413,17 @@ class SplitEditorView: NSView {
     override func mouseDown(with event: NSEvent) {
         window?.makeFirstResponder(self)
         let pt = convert(event.locationInWindow, from: nil)
-        guard let clicked = findZone(root, pt, bounds.insetBy(dx: 2, dy: 2), []) else {
+        guard let clicked = findZone(root, pt, bounds, []) else {
             selectedPaths = []
             onSelectionChanged?()
             return
         }
 
         if event.modifierFlags.contains(.shift) && !selectedPaths.isEmpty {
-            // Shift-click: expand selection to cover clicked zone too.
-            // Find the LCA of existing selection + new click, then select ALL
-            // zones under that LCA so it forms a valid mergeable region.
             var anchors = selectedPaths
             if !anchors.contains(clicked) {
                 anchors.append(clicked)
             } else {
-                // Shift-clicking an already-selected zone: deselect by
-                // shrinking back to just the other anchor zones that were
-                // explicitly clicked. For simplicity, just deselect all.
                 selectedPaths = []
                 onSelectionChanged?()
                 return
@@ -468,7 +476,6 @@ class SplitEditorView: NSView {
         if selectedPaths.count == 1 {
             return selectedPaths[0].count > 0
         }
-        // Multi-select always forms a valid LCA group (auto-expanded on click)
         return selectedPaths.count >= 2
     }
 
@@ -505,7 +512,6 @@ class SplitEditorView: NSView {
         pushUndo()
 
         if selectedPaths.count == 1 {
-            // Single selection: merge with sibling
             let path = selectedPaths[0]
             guard !path.isEmpty else { undoStack.removeLast(); return }
             let parentPath = Array(path.dropLast())
@@ -519,8 +525,6 @@ class SplitEditorView: NSView {
                 onSelectionChanged?()
             }
         } else if selectedPaths.count >= 2 {
-            // Multi-select: selection is always a complete LCA subtree,
-            // so replace the LCA with a single zone
             let lca = lowestCommonAncestor(selectedPaths)
             root = setNode(at: lca, to: .zone(label: "1"))
             renumberAll()
@@ -566,5 +570,77 @@ class SplitEditorView: NSView {
         return path[0] == 0
             ? .split(direction: d, ratio: r, first: setRec(f, rest, new), second: s)
             : .split(direction: d, ratio: r, first: f, second: setRec(s, rest, new))
+    }
+}
+
+// MARK: - Custom Pill Button (solid color or gradient)
+
+class PillButton: NSButton {
+    /// Set to a color for a solid fill; leave nil for the gradient
+    var solidColor: NSColor? { didSet { needsDisplay = true } }
+
+    convenience init(title: String, target: AnyObject?, action: Selector?) {
+        self.init(frame: .zero)
+        self.title = title
+        self.target = target
+        self.action = action
+        self.isBordered = false
+        self.font = NSFont.systemFont(ofSize: 12.5, weight: .semibold)
+        self.wantsLayer = true
+        self.setButtonType(.momentaryChange)
+    }
+
+    override var isEnabled: Bool {
+        didSet { needsDisplay = true }
+    }
+
+    override var intrinsicContentSize: NSSize {
+        let textSize = (title as NSString).size(withAttributes: [.font: font as Any])
+        return NSSize(width: textSize.width + 28, height: 32)
+    }
+
+    override func draw(_ dirtyRect: NSRect) {
+        let r = bounds
+        let path = NSBezierPath(roundedRect: r, xRadius: r.height / 2, yRadius: r.height / 2)
+
+        if isEnabled {
+            if let solid = solidColor {
+                solid.setFill()
+                path.fill()
+            } else {
+                // Gradient fill
+                let blue = PreferencesWindowController.brandBlue
+                let purple = PreferencesWindowController.brandPurple
+                let pink = PreferencesWindowController.brandPink
+                if let gradient = NSGradient(colors: [blue, purple, pink],
+                                              atLocations: [0.0, 0.5, 1.0], colorSpace: .deviceRGB) {
+                    gradient.draw(in: path, angle: 135)
+                }
+            }
+        } else {
+            NSColor.separatorColor.withAlphaComponent(0.15).setFill()
+            path.fill()
+        }
+
+        // Centered title
+        let color: NSColor = isEnabled ? .white : .tertiaryLabelColor
+        let attrs: [NSAttributedString.Key: Any] = [
+            .font: font as Any,
+            .foregroundColor: color
+        ]
+        let sz = (title as NSString).size(withAttributes: attrs)
+        let textRect = NSRect(
+            x: (r.width - sz.width) / 2,
+            y: (r.height - sz.height) / 2,
+            width: sz.width,
+            height: sz.height)
+        (title as NSString).draw(in: textRect, withAttributes: attrs)
+    }
+
+    override func mouseDown(with event: NSEvent) {
+        guard isEnabled else { return }
+        alphaValue = 0.7
+        super.mouseDown(with: event)
+        alphaValue = 1.0
     }
 }
