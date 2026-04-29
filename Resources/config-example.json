@@ -1,0 +1,104 @@
+{
+  "layouts": [
+    {
+      "name": "Dev Layout",
+      "activateKey": { "key": "d", "modifiers": ["control", "option"] },
+      "regions": [
+        {
+          "name": "Left Grid (6 zones)",
+          "origin": { "x": 0.0, "y": 0.0 },
+          "size": { "width": 0.5, "height": 1.0 },
+          "rows": 3,
+          "cols": 2,
+          "zones": [
+            { "label": "Top Left", "row": 0, "col": 0, "key": "1" },
+            { "label": "Top Right", "row": 0, "col": 1, "key": "2" },
+            { "label": "Mid Left", "row": 1, "col": 0, "key": "3" },
+            { "label": "Mid Right", "row": 1, "col": 1, "key": "4" },
+            { "label": "Bot Left", "row": 2, "col": 0, "key": "5" },
+            { "label": "Bot Right", "row": 2, "col": 1, "key": "6" }
+          ]
+        },
+        {
+          "name": "Right Stack (2 zones)",
+          "origin": { "x": 0.5, "y": 0.0 },
+          "size": { "width": 0.5, "height": 1.0 },
+          "rows": 2,
+          "cols": 1,
+          "zones": [
+            { "label": "Top Right Half", "row": 0, "col": 0, "key": "7" },
+            { "label": "Bot Right Half", "row": 1, "col": 0, "key": "8" }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Eight Grid",
+      "activateKey": { "key": "e", "modifiers": ["control", "option"] },
+      "regions": [
+        {
+          "name": "Left Grid (8 zones)",
+          "origin": { "x": 0.0, "y": 0.0 },
+          "size": { "width": 0.5, "height": 1.0 },
+          "rows": 4,
+          "cols": 2,
+          "zones": [
+            { "label": "R1C1", "row": 0, "col": 0, "key": "1" },
+            { "label": "R1C2", "row": 0, "col": 1, "key": "2" },
+            { "label": "R2C1", "row": 1, "col": 0, "key": "3" },
+            { "label": "R2C2", "row": 1, "col": 1, "key": "4" },
+            { "label": "R3C1", "row": 2, "col": 0, "key": "5" },
+            { "label": "R3C2", "row": 2, "col": 1, "key": "6" },
+            { "label": "R4C1", "row": 3, "col": 0, "key": "7" },
+            { "label": "R4C2", "row": 3, "col": 1, "key": "8" }
+          ]
+        },
+        {
+          "name": "Right Stack (2 zones)",
+          "origin": { "x": 0.5, "y": 0.0 },
+          "size": { "width": 0.5, "height": 1.0 },
+          "rows": 2,
+          "cols": 1,
+          "zones": [
+            { "label": "Top Right Half", "row": 0, "col": 0, "key": "9" },
+            { "label": "Bot Right Half", "row": 1, "col": 0, "key": "0" }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Quarter Thirds",
+      "activateKey": { "key": "t", "modifiers": ["control", "option"] },
+      "regions": [
+        {
+          "name": "Top-Right Quarter (3 stacked)",
+          "origin": { "x": 0.75, "y": 0.0 },
+          "size": { "width": 0.25, "height": 1.0 },
+          "rows": 3,
+          "cols": 1,
+          "zones": [
+            { "label": "Top", "row": 0, "col": 0, "key": "1" },
+            { "label": "Mid", "row": 1, "col": 0, "key": "2" },
+            { "label": "Bot", "row": 2, "col": 0, "key": "3" }
+          ]
+        },
+        {
+          "name": "Left Three-Quarters",
+          "origin": { "x": 0.0, "y": 0.0 },
+          "size": { "width": 0.75, "height": 1.0 },
+          "rows": 1,
+          "cols": 1,
+          "zones": [
+            {
+              "label": "Main",
+              "row": 0,
+              "col": 0,
+              "key": "4",
+              "directKey": { "key": "4", "modifiers": ["control", "option"] }
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}
