@@ -10,10 +10,7 @@ archive/upload — steps below in order.
 
 ## 1. One-time prerequisites
 
-- [ ] **Apple Developer Program** ($99/yr) — enroll at
-      https://developer.apple.com/programs/enroll/ as Harvey Creative (org
-      enrollment needs a D-U-N-S number; individual enrollment is faster and
-      fine — the seller name on the store is just your name in that case).
+- [x] **Apple Developer Program** — already enrolled (confirmed 2026-08-14).
 - [ ] **Paid Applications agreement** — in App Store Connect →
       Business, accept the Paid Apps agreement and complete banking + tax
       forms. Subscriptions cannot go live without this. Do it first; approval
@@ -30,14 +27,12 @@ archive/upload — steps below in order.
 
 ## 2. Host the privacy policy
 
-The paywall links to `https://harveycreative.co/screendivider/privacy.html`
-(see `PaywallWindowController.privacyPolicyURL`). Apple requires this URL to
-be live at review time, and it also goes in the App Store listing.
-
-Add the page to the agency-site repo (remember: build via `node build.mjs`
-and commit `dist/`). Content: the app collects no data, everything stays on
-device, payments handled by Apple. Terms of Use link uses Apple's standard
-EULA, which is fine for subscriptions.
+- [x] DONE (2026-08-14): live at
+      `https://harveycreative.co/screendivider/privacy.html` (agency-site
+      commit 2068b0c). The paywall links to it
+      (`PaywallWindowController.privacyPolicyURL`) and the same URL goes in
+      the App Store listing. Terms of Use uses Apple's standard EULA, which
+      is fine for subscriptions.
 
 ## 3. App Store Connect setup
 
