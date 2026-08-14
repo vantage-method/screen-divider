@@ -7,8 +7,13 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     private var dragDetector: DragDetector!
     private var overlayController: ZoneOverlayController!
     private var preferencesController: PreferencesWindowController?
+    private var paywallController: PaywallWindowController?
     var currentConfig: ScreenDividerConfig?
     private var permissionCheckTimer: Timer?
+    /// The user's own on/off toggle; actual detection also requires an
+    /// active subscription (see applyDragGate).
+    private var dragUserEnabled = true
+    private var hasShownLaunchPaywall = false
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
         return false
@@ -69,6 +74,21 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                 self?.statusItem.menu = self?.buildMenu()
             }
             configManager.startWatching()
+
+            // Subscription state drives whether snapping is active
+            SubscriptionManager.shared.onStatusRefreshed = { [weak self] subscribed in
+                guard let self = self else { return }
+                self.applyDragGate()
+                self.statusItem.menu = self.buildMenu()
+                if subscribed {
+                    self.paywallController?.close()
+                } else if !self.hasShownLaunchPaywall {
+                    self.hasShownLaunchPaywall = true
+                    self.showPaywall()
+                }
+            }
+            SubscriptionManager.shared.start()
+            applyDragGate()
 
             // Trigger the native macOS accessibility prompt
             AXIsProcessTrustedWithOptions(
@@ -166,6 +186,13 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             menu.addItem(.separator())
         }
 
+        if SubscriptionManager.shared.statusKnown && !SubscriptionManager.shared.isSubscribed {
+            let item = NSMenuItem(title: "Unlock Screen Divider...", action: #selector(showPaywallAction), keyEquivalent: "")
+            item.target = self
+            menu.addItem(item)
+            menu.addItem(.separator())
+        }
+
         // Screen layouts
         if let config = currentConfig {
             for (index, layout) in config.screens.enumerated() {
@@ -199,6 +226,12 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         permItem.target = self
         menu.addItem(permItem)
 
+        if SubscriptionManager.shared.isSubscribed {
+            let subItem = NSMenuItem(title: "Manage Subscription...", action: #selector(openManageSubscription), keyEquivalent: "")
+            subItem.target = self
+            menu.addItem(subItem)
+        }
+
         menu.addItem(.separator())
         menu.addItem(NSMenuItem(title: "Quit", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q"))
 
@@ -208,8 +241,38 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     // MARK: - Actions
 
     @objc private func toggleDrag(_ sender: NSMenuItem) {
-        dragDetector.isEnabled.toggle()
+        guard SubscriptionManager.shared.isSubscribed else {
+            showPaywall()
+            return
+        }
+        dragUserEnabled.toggle()
+        applyDragGate()
         sender.state = dragDetector.isEnabled ? .on : .off
+    }
+
+    /// Snapping runs only when the user has it on AND a subscription is active.
+    private func applyDragGate() {
+        dragDetector.isEnabled = dragUserEnabled && SubscriptionManager.shared.isSubscribed
+    }
+
+    @objc private func showPaywallAction() {
+        showPaywall()
+    }
+
+    private func showPaywall() {
+        if paywallController == nil {
+            let controller = PaywallWindowController()
+            controller.onUnlocked = { [weak self] in
+                self?.applyDragGate()
+                self?.statusItem.menu = self?.buildMenu()
+            }
+            paywallController = controller
+        }
+        paywallController?.show()
+    }
+
+    @objc private func openManageSubscription() {
+        NSWorkspace.shared.open(URL(string: "https://apps.apple.com/account/subscriptions")!)
     }
 
     @objc private func openAccessibilitySettings() {
@@ -252,7 +315,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             })
         controller.willOpen = { [weak self] in self?.dragDetector.isEnabled = false }
         controller.didClose = { [weak self] in
-            self?.dragDetector.isEnabled = true
+            self?.applyDragGate()
         }
         preferencesController = controller
         controller.showWindow(selectScreenIndex: screenIndex)

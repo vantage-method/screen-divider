@@ -1,0 +1,31 @@
+# XcodeGen spec — generates ScreenDivider.xcodeproj for Mac App Store builds.
+# Install: brew install xcodegen   Generate: xcodegen generate
+# Dev builds can keep using `swift build`; this project is for archive/submit.
+name: ScreenDivider
+options:
+  deploymentTarget:
+    macOS: "13.0"
+  createIntermediateGroups: true
+targets:
+  ScreenDivider:
+    type: application
+    platform: macOS
+    sources:
+      - path: Sources/ScreenDivider
+      - path: Resources
+        buildPhase: resources
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.vantagemethod.screendivider
+        PRODUCT_NAME: Screen Divider
+        INFOPLIST_FILE: Info.plist
+        GENERATE_INFOPLIST_FILE: NO
+        CODE_SIGN_ENTITLEMENTS: ScreenDivider.entitlements
+        CODE_SIGN_STYLE: Automatic
+        # Set your Apple Developer Team ID after enrolling:
+        DEVELOPMENT_TEAM: ""
+        MARKETING_VERSION: "1.1"
+        CURRENT_PROJECT_VERSION: 2
+        ENABLE_HARDENED_RUNTIME: YES
+        SWIFT_VERSION: "5.0"
+        COMBINE_HIDPI_IMAGES: YES
