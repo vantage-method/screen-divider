@@ -2,3 +2,4 @@
 /ScreenDivider
 *.o
 .DS_Store
+*.dmg
