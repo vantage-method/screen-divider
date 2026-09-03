@@ -47,8 +47,29 @@ cp Resources/menubar-icon@2x.png "$BUNDLE_PATH/Contents/Resources/" 2>/dev/null 
 cp Resources/menubar-icon@3x.png "$BUNDLE_PATH/Contents/Resources/" 2>/dev/null || true
 cp Resources/config-example.json "$BUNDLE_PATH/Contents/Resources/" 2>/dev/null || true
 
-# Ad-hoc sign so macOS can persistently identify the app for permissions
-codesign --force --deep --sign - "$BUNDLE_PATH" 2>&1
+# Sign the bundle so macOS can identify the app for permissions.
+#
+# By default this is an ad-hoc signature, whose identity is the code hash —
+# so every rebuild changes it and macOS silently drops any Accessibility
+# grant, forcing a re-grant. To avoid that, a self-hosted install can use a
+# stable self-signed identity: drop a gitignored `.local-signing` file next
+# to this script defining SD_SIGN_KEYCHAIN, SD_SIGN_KEYCHAIN_PW and
+# SD_SIGN_IDENTITY. The identity's designated requirement pins to the cert
+# (not the code hash), so the permission grant survives every future build.
+SIGN_IDENTITY="-"
+SIGN_ARGS=()
+if [ -f "$SCRIPT_DIR/.local-signing" ]; then
+  # shellcheck disable=SC1091
+  . "$SCRIPT_DIR/.local-signing"
+  if [ -n "${SD_SIGN_KEYCHAIN:-}" ] \
+     && security find-identity -p codesigning "$SD_SIGN_KEYCHAIN" 2>/dev/null | grep -q "${SD_SIGN_IDENTITY:-__none__}"; then
+    security unlock-keychain -p "$SD_SIGN_KEYCHAIN_PW" "$SD_SIGN_KEYCHAIN" 2>/dev/null || true
+    SIGN_IDENTITY="$SD_SIGN_IDENTITY"
+    SIGN_ARGS=(--keychain "$SD_SIGN_KEYCHAIN")
+    echo "  (signing with stable identity: $SD_SIGN_IDENTITY)"
+  fi
+fi
+codesign --force --deep --sign "$SIGN_IDENTITY" "${SIGN_ARGS[@]}" "$BUNDLE_PATH" 2>&1
 
 echo ""
 echo "Installed to: $BUNDLE_PATH"
