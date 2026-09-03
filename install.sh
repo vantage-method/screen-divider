@@ -41,6 +41,18 @@ cp ScreenDivider "$BUNDLE_PATH/Contents/MacOS/ScreenDivider"
 # Copy Info.plist
 cp Info.plist "$BUNDLE_PATH/Contents/Info.plist"
 
+# Embed the source location + built commit so the app's "Check for Updates"
+# can pull this same clone and reinstall. Must run BEFORE codesign, since
+# editing Info.plist after signing would invalidate the signature.
+PLIST="$BUNDLE_PATH/Contents/Info.plist"
+BUILD_COMMIT="$(git -C "$SCRIPT_DIR" rev-parse HEAD 2>/dev/null || echo "")"
+REPO_REMOTE="$(git -C "$SCRIPT_DIR" remote get-url origin 2>/dev/null || echo "")"
+for kv in "SDRepoPath:$SCRIPT_DIR" "SDBuildCommit:$BUILD_COMMIT" "SDRepoRemote:$REPO_REMOTE"; do
+  key="${kv%%:*}"; val="${kv#*:}"
+  /usr/libexec/PlistBuddy -c "Add :$key string $val" "$PLIST" 2>/dev/null \
+    || /usr/libexec/PlistBuddy -c "Set :$key $val" "$PLIST"
+done
+
 # Copy resources (icons, config example)
 cp Resources/AppIcon.icns "$BUNDLE_PATH/Contents/Resources/" 2>/dev/null || true
 cp Resources/menubar-icon.png "$BUNDLE_PATH/Contents/Resources/" 2>/dev/null || true
