@@ -320,6 +320,10 @@ class SplitEditorView: NSView {
     var canUndo: Bool { !undoStack.isEmpty }
 
     override var acceptsFirstResponder: Bool { true }
+    // Grid fractions are top-origin (y=0 = top), matching the overlay and the
+    // Accessibility coordinate space. Flip this view so it renders the same
+    // way — otherwise the editor is vertically mirrored vs. the real screen.
+    override var isFlipped: Bool { true }
 
     func setGrid(_ g: GridLayout) {
         grid = g
@@ -362,22 +366,20 @@ class SplitEditorView: NSView {
     override func draw(_ dirtyRect: NSRect) {
         let brandPurple = PreferencesWindowController.brandPurple
 
-        // faint cell lattice underneath (shows empty cells + merge structure)
-        NSColor.separatorColor.withAlphaComponent(0.10).setStroke()
+        // Outline only EMPTY cells (dashed) — never draw full-length grid
+        // lines, which would ghost straight through a merged zone whenever a
+        // track boundary is still shared by a neighbouring row/column.
         let re = grid.rowEdges(), ce = grid.colEdges()
-        for e in re.dropFirst().dropLast() {
-            let path = NSBezierPath()
-            path.move(to: CGPoint(x: bounds.minX, y: bounds.minY + CGFloat(e) * bounds.height))
-            path.line(to: CGPoint(x: bounds.maxX, y: bounds.minY + CGFloat(e) * bounds.height))
-            path.lineWidth = 0.5
-            path.stroke()
-        }
-        for e in ce.dropFirst().dropLast() {
-            let path = NSBezierPath()
-            path.move(to: CGPoint(x: bounds.minX + CGFloat(e) * bounds.width, y: bounds.minY))
-            path.line(to: CGPoint(x: bounds.minX + CGFloat(e) * bounds.width, y: bounds.maxY))
-            path.lineWidth = 0.5
-            path.stroke()
+        NSColor.separatorColor.withAlphaComponent(0.35).setStroke()
+        for r in 0..<grid.rows.count {
+            for c in 0..<grid.cols.count where grid.zoneIndex(atRow: r, col: c) == nil {
+                let cell = CGRect(x: ce[c], y: re[r], width: grid.cols[c], height: grid.rows[r])
+                let vr = viewRect(cell).insetBy(dx: 2, dy: 2)
+                let path = NSBezierPath(roundedRect: vr, xRadius: 4, yRadius: 4)
+                path.lineWidth = 0.5
+                path.setLineDash([3, 3], count: 2, phase: 0)
+                path.stroke()
+            }
         }
 
         for (i, z) in grid.rects().enumerated() {
