@@ -131,7 +131,7 @@ struct GridZone: Codable, Equatable {
 }
 
 struct GridLayout: Codable, Equatable {
-    var rows: [Double]   // fractional track sizes, bottom -> top (Cocoa y-up), sum 1
+    var rows: [Double]   // fractional track sizes, top -> bottom (y=0 = top), sum 1
     var cols: [Double]   // left -> right, sum 1
     var zones: [GridZone]
 
@@ -327,9 +327,9 @@ struct GridLayout: Codable, Equatable {
                 } else { k += 1 }
             }
         }
-        // reading order: top row first (high y), then left to right
+        // reading order: top row first (low r0, since y=0 is top), then left to right
         zones.sort { a, b in
-            if a.r1 != b.r1 { return a.r1 > b.r1 }
+            if a.r0 != b.r0 { return a.r0 < b.r0 }
             return a.c0 < b.c0
         }
         for (i, _) in zones.enumerated() { zones[i].label = "\(i + 1)" }
@@ -342,10 +342,10 @@ struct GridLayout: Codable, Equatable {
     }
     static var defaultQuad: GridLayout {
         GridLayout(rows: [0.5, 0.5], cols: [0.5, 0.5], zones: [
-            GridZone(label: "1", r0: 1, r1: 1, c0: 0, c1: 0),
-            GridZone(label: "2", r0: 1, r1: 1, c0: 1, c1: 1),
-            GridZone(label: "3", r0: 0, r1: 0, c0: 0, c1: 0),
-            GridZone(label: "4", r0: 0, r1: 0, c0: 1, c1: 1)])
+            GridZone(label: "1", r0: 0, r1: 0, c0: 0, c1: 0),
+            GridZone(label: "2", r0: 0, r1: 0, c0: 1, c1: 1),
+            GridZone(label: "3", r0: 1, r1: 1, c0: 0, c1: 0),
+            GridZone(label: "4", r0: 1, r1: 1, c0: 1, c1: 1)])
     }
 }
 

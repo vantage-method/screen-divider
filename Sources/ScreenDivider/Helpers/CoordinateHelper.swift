@@ -34,8 +34,10 @@ struct CoordinateHelper {
     }
 
     /// Hit-test: find which zone a point (in global top-left coords) falls in.
+    /// Uses the grid (layout.zoneRects) — the same source the overlay draws
+    /// from — so hover highlighting and snapping match what's on screen.
     static func zoneAt(point: CGPoint, layout: ScreenLayout, screen: NSScreen) -> (label: String, fractionalRect: CGRect)? {
-        let zones = layout.root.flattenZones()
+        let zones = layout.zoneRects
         for z in zones {
             let absRect = absoluteRect(fractional: z.rect, on: screen)
             if absRect.contains(point) {
