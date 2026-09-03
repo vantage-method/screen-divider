@@ -69,6 +69,13 @@ final class SubscriptionManager {
         // Dev-build escape hatch so `swift build` runs work without a receipt.
         if ProcessInfo.processInfo.environment["SD_DEV_UNLOCK"] == "1" { entitled = true }
         #endif
+        #if SD_LOCAL_UNLOCK
+        // Local self-hosted build. Enabled by placing a `.local-unlock` marker
+        // file next to install.sh, which passes -D SD_LOCAL_UNLOCK to swiftc.
+        // App Store / xcodegen archive builds never define this flag, so the
+        // paywall stays intact for distribution.
+        entitled = true
+        #endif
         let newValue = entitled
         DispatchQueue.main.async {
             self.isSubscribed = newValue

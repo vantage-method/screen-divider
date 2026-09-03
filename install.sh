@@ -9,10 +9,21 @@ INSTALL_DIR="/Applications"
 echo "Building Screen Divider..."
 cd "$SCRIPT_DIR"
 
+# Optional local unlock: a self-hosted build that bypasses the App Store
+# paywall. Enabled by creating a `.local-unlock` marker file next to this
+# script (it's gitignored, so it never ships). App Store / xcodegen builds
+# never define this flag, so distribution stays paywalled.
+UNLOCK_FLAG=""
+if [ -f "$SCRIPT_DIR/.local-unlock" ]; then
+  UNLOCK_FLAG="-D SD_LOCAL_UNLOCK"
+  echo "  (.local-unlock present → building with paywall disabled)"
+fi
+
 # Build with swiftc (works with Command Line Tools, no Xcode needed)
 # Compile every Swift source so new files are picked up automatically.
 swiftc -sdk "$(xcrun --sdk macosx --show-sdk-path)" \
   -framework AppKit -framework ApplicationServices \
+  $UNLOCK_FLAG \
   -O -o ScreenDivider \
   $(find Sources/ScreenDivider -name "*.swift")
 
