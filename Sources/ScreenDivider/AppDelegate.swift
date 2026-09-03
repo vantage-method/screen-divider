@@ -14,6 +14,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     /// active subscription (see applyDragGate).
     private var dragUserEnabled = true
     private var hasShownLaunchPaywall = false
+    /// Commits behind upstream, discovered by the silent launch check.
+    private var pendingUpdateCount = 0
+    private var isUpdating = false
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
         return false
@@ -74,6 +77,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                 self?.statusItem.menu = self?.buildMenu()
             }
             configManager.startWatching()
+
+            // Silent update check on launch (dev builds installed from a clone).
+            scheduleSilentUpdateCheck()
 
             // Subscription state drives whether snapping is active
             SubscriptionManager.shared.onStatusRefreshed = { [weak self] subscribed in
@@ -232,6 +238,15 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             menu.addItem(subItem)
         }
 
+        if UpdateManager.shared.canSelfUpdate {
+            let title = pendingUpdateCount > 0
+                ? "Install Update (\(pendingUpdateCount) new)..."
+                : "Check for Updates..."
+            let updateItem = NSMenuItem(title: title, action: #selector(checkForUpdates), keyEquivalent: "")
+            updateItem.target = self
+            menu.addItem(updateItem)
+        }
+
         menu.addItem(.separator())
         menu.addItem(NSMenuItem(title: "Quit", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q"))
 
@@ -273,6 +288,93 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc private func openManageSubscription() {
         NSWorkspace.shared.open(URL(string: "https://apps.apple.com/account/subscriptions")!)
+    }
+
+    // MARK: - Updates
+
+    /// Quiet check on launch; only surfaces an update by updating the menu.
+    private func scheduleSilentUpdateCheck() {
+        guard UpdateManager.shared.canSelfUpdate else { return }
+        UpdateManager.shared.check { [weak self] result in
+            guard let self = self else { return }
+            if case .success(let status) = result {
+                self.pendingUpdateCount = status.behind
+                self.statusItem.menu = self.buildMenu()
+            }
+        }
+    }
+
+    /// Menu action: fetch, and if behind, offer to install and relaunch.
+    @objc private func checkForUpdates() {
+        guard !isUpdating else { return }
+        UpdateManager.shared.check { [weak self] result in
+            guard let self = self else { return }
+            switch result {
+            case .failure(let error):
+                self.showUpdateAlert(title: "Couldn't Check for Updates",
+                                     text: error.localizedDescription, style: .warning)
+            case .success(let status):
+                self.pendingUpdateCount = status.behind
+                self.statusItem.menu = self.buildMenu()
+                if status.behind <= 0 {
+                    self.showUpdateAlert(title: "You're Up to Date",
+                                         text: "Screen Divider is running the latest version.", style: .informational)
+                    return
+                }
+                let alert = NSAlert()
+                alert.messageText = "Update Available"
+                alert.informativeText = "\(status.behind) new change\(status.behind == 1 ? "" : "s") on \(status.branch). Install now and relaunch?"
+                alert.addButton(withTitle: "Install & Relaunch")
+                alert.addButton(withTitle: "Later")
+                NSApp.activate(ignoringOtherApps: true)
+                guard alert.runModal() == .alertFirstButtonReturn else { return }
+                self.runUpdate()
+            }
+        }
+    }
+
+    private func runUpdate() {
+        isUpdating = true
+        let progress = NSAlert()
+        progress.messageText = "Updating Screen Divider"
+        progress.informativeText = "Starting…"
+        let spinner = NSProgressIndicator(frame: NSRect(x: 0, y: 0, width: 24, height: 24))
+        spinner.style = .spinning
+        spinner.startAnimation(nil)
+        progress.accessoryView = spinner
+        // Show as a non-blocking panel so we can update its text as we go.
+        let panel = progress.window
+        NSApp.activate(ignoringOtherApps: true)
+        panel.center()
+        panel.makeKeyAndOrderFront(nil)
+
+        UpdateManager.shared.performUpdate(progress: { msg in
+            progress.informativeText = msg
+        }, done: { [weak self] result in
+            guard let self = self else { return }
+            panel.orderOut(nil)
+            self.isUpdating = false
+            switch result {
+            case .success:
+                // The new build is installed; the relaunch helper will reopen
+                // it after we quit.
+                NSApp.terminate(nil)
+            case .failure(let error):
+                self.showUpdateAlert(title: "Update Failed",
+                                     text: error.localizedDescription + "\n\nYou can update manually with ./install.sh.",
+                                     style: .critical)
+            }
+        })
+    }
+
+    private func showUpdateAlert(title: String, text: String, style: NSAlert.Style) {
+        let alert = NSAlert()
+        alert.messageText = title
+        alert.informativeText = text
+        alert.alertStyle = style
+        alert.addButton(withTitle: "OK")
+        NSApp.activate(ignoringOtherApps: true)
+        alert.runModal()
     }
 
     @objc private func openAccessibilitySettings() {
