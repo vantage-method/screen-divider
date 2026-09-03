@@ -1,5 +1,6 @@
 import AppKit
 import ApplicationServices
+import UserNotifications
 
 class AppDelegate: NSObject, NSApplicationDelegate {
     private var statusItem: NSStatusItem!
@@ -17,6 +18,10 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     /// Commits behind upstream, discovered by the silent launch check.
     private var pendingUpdateCount = 0
     private var isUpdating = false
+    private var updateCheckTimer: Timer?
+    /// Upstream commit we last nudged about, so we don't renotify each cycle.
+    private var lastNotifiedLatest = ""
+    private let updateCheckInterval: TimeInterval = 6 * 3600
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
         return false
@@ -78,8 +83,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             }
             configManager.startWatching()
 
-            // Silent update check on launch (dev builds installed from a clone).
-            scheduleSilentUpdateCheck()
+            // Silent update check on launch + periodically (dev builds from a clone).
+            startUpdateChecks()
 
             // Subscription state drives whether snapping is active
             SubscriptionManager.shared.onStatusRefreshed = { [weak self] subscribed in
@@ -292,15 +297,47 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
     // MARK: - Updates
 
-    /// Quiet check on launch; only surfaces an update by updating the menu.
-    private func scheduleSilentUpdateCheck() {
+    /// Check on launch, then re-check on a timer so the app nudges you when an
+    /// update lands without you having to open the menu.
+    private func startUpdateChecks() {
         guard UpdateManager.shared.canSelfUpdate else { return }
+        performSilentUpdateCheck()
+        updateCheckTimer?.invalidate()
+        updateCheckTimer = Timer.scheduledTimer(withTimeInterval: updateCheckInterval, repeats: true) { [weak self] _ in
+            self?.performSilentUpdateCheck()
+        }
+    }
+
+    /// Quiet check: refreshes the menu, and posts a (provisional, no-prompt)
+    /// notification the first time a given upstream commit becomes available.
+    private func performSilentUpdateCheck() {
+        guard UpdateManager.shared.canSelfUpdate, !isUpdating else { return }
         UpdateManager.shared.check { [weak self] result in
-            guard let self = self else { return }
-            if case .success(let status) = result {
-                self.pendingUpdateCount = status.behind
-                self.statusItem.menu = self.buildMenu()
+            guard let self = self, case .success(let status) = result else { return }
+            self.pendingUpdateCount = status.behind
+            self.statusItem.menu = self.buildMenu()
+            if status.behind > 0, status.latestShort != self.lastNotifiedLatest {
+                self.lastNotifiedLatest = status.latestShort
+                self.postUpdateNotification(count: status.behind)
+            } else if status.behind == 0 {
+                self.lastNotifiedLatest = ""
+                UNUserNotificationCenter.current()
+                    .removeDeliveredNotifications(withIdentifiers: ["sd.update.available"])
             }
+        }
+    }
+
+    /// Provisional authorization delivers quietly to Notification Center with no
+    /// permission dialog; the menu-bar item is the always-present fallback.
+    private func postUpdateNotification(count: Int) {
+        let center = UNUserNotificationCenter.current()
+        center.requestAuthorization(options: [.provisional, .alert]) { granted, _ in
+            guard granted else { return }
+            let content = UNMutableNotificationContent()
+            content.title = "Screen Divider Update Available"
+            content.body = "\(count) new change\(count == 1 ? "" : "s"). Open the menu bar icon to install."
+            let request = UNNotificationRequest(identifier: "sd.update.available", content: content, trigger: nil)
+            center.add(request)
         }
     }
 
