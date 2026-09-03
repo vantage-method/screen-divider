@@ -10,21 +10,11 @@ echo "Building Screen Divider..."
 cd "$SCRIPT_DIR"
 
 # Build with swiftc (works with Command Line Tools, no Xcode needed)
+# Compile every Swift source so new files are picked up automatically.
 swiftc -sdk "$(xcrun --sdk macosx --show-sdk-path)" \
   -framework AppKit -framework ApplicationServices \
   -O -o ScreenDivider \
-  Sources/ScreenDivider/main.swift \
-  Sources/ScreenDivider/AppDelegate.swift \
-  Sources/ScreenDivider/Helpers/CoordinateHelper.swift \
-  Sources/ScreenDivider/Managers/ConfigManager.swift \
-  Sources/ScreenDivider/Managers/DragDetector.swift \
-  Sources/ScreenDivider/Managers/LoginItemManager.swift \
-  Sources/ScreenDivider/Managers/WindowManager.swift \
-  Sources/ScreenDivider/Models/Config.swift \
-  Sources/ScreenDivider/Views/PreferencesWindowController.swift \
-  Sources/ScreenDivider/Views/ZoneOverlayController.swift \
-  Sources/ScreenDivider/Views/SetupWindowController.swift \
-  Sources/ScreenDivider/Views/ZoneOverlayView.swift
+  $(find Sources/ScreenDivider -name "*.swift")
 
 echo "Creating app bundle..."
 BUNDLE_PATH="$INSTALL_DIR/$APP_BUNDLE"
