@@ -68,7 +68,7 @@ indirect enum SplitNode: Codable {
         }
     }
 
-    /// Count total zones (leaves)
+    /// Count total leaf cells (tree leaves), regardless of merging.
     var zoneCount: Int {
         switch self {
         case .zone: return 1
@@ -77,16 +77,44 @@ indirect enum SplitNode: Codable {
         }
     }
 
-    /// Flatten the tree into (label, rect) pairs given a bounding rect.
+    /// Number of distinct snap zones after merging (leaves sharing a label
+    /// count once). This is what the user perceives as "zones".
+    var mergedZoneCount: Int {
+        var labels = Set<String>()
+        for leaf in rawLeaves() { labels.insert(leaf.label) }
+        return labels.count
+    }
+
+    /// Raw per-leaf rects, one entry per tree leaf (merges NOT applied).
     /// Rect is in fractional coordinates (0-1).
-    func flattenZones(in rect: CGRect = CGRect(x: 0, y: 0, width: 1, height: 1)) -> [(label: String, rect: CGRect)] {
+    func rawLeaves(in rect: CGRect = CGRect(x: 0, y: 0, width: 1, height: 1)) -> [(label: String, rect: CGRect)] {
         switch self {
         case .zone(let label):
             return [(label: label, rect: rect)]
         case .split(let dir, let ratio, let first, let second):
             let (r1, r2) = splitRect(rect, direction: dir, ratio: ratio)
-            return first.flattenZones(in: r1) + second.flattenZones(in: r2)
+            return first.rawLeaves(in: r1) + second.rawLeaves(in: r2)
         }
+    }
+
+    /// Flatten into snap zones. Leaves that share a label are one merged zone,
+    /// returned as the union (bounding rect) of their cells. Order follows each
+    /// label's first appearance in the tree. Rect is fractional (0-1).
+    ///
+    /// A merge is only ever created (in the editor) when the selected cells
+    /// tile a solid rectangle, so the bounding rect equals the covered area.
+    func flattenZones(in rect: CGRect = CGRect(x: 0, y: 0, width: 1, height: 1)) -> [(label: String, rect: CGRect)] {
+        var order: [String] = []
+        var union: [String: CGRect] = [:]
+        for leaf in rawLeaves(in: rect) {
+            if let existing = union[leaf.label] {
+                union[leaf.label] = existing.union(leaf.rect)
+            } else {
+                union[leaf.label] = leaf.rect
+                order.append(leaf.label)
+            }
+        }
+        return order.map { (label: $0, rect: union[$0]!) }
     }
 
     /// Split a rect by direction and ratio

@@ -10,6 +10,7 @@ class PreferencesWindowController: NSObject, NSWindowDelegate {
     private var splitH3Btn: NSButton!
     private var splitV3Btn: NSButton!
     private var removeBtn: NSButton!
+    private var unmergeBtn: NSButton!
     private var undoBtn: NSButton!
     private var savePresetBtn: NSButton!
     private var deletePresetBtn: NSButton!
@@ -208,11 +209,12 @@ class PreferencesWindowController: NSObject, NSWindowDelegate {
         splitH3Btn = makePillBtn("\u{2500} Thirds", #selector(doSplitH3), color: blue)
         splitV3Btn = makePillBtn("\u{2502} Thirds", #selector(doSplitV3), color: purple)
         removeBtn = makePillBtn("Merge", #selector(doRemove))  // gradient (default)
+        unmergeBtn = makePillBtn("Unmerge", #selector(doUnmerge))
         undoBtn = makePillBtn("Undo", #selector(doUndo))
         undoBtn.keyEquivalent = "z"
         undoBtn.keyEquivalentModifierMask = .command
 
-        for b in [splitHBtn!, splitVBtn!, splitH3Btn!, splitV3Btn!, removeBtn!, undoBtn!] {
+        for b in [splitHBtn!, splitVBtn!, splitH3Btn!, splitV3Btn!, removeBtn!, unmergeBtn!, undoBtn!] {
             b.isEnabled = false
         }
 
@@ -220,14 +222,14 @@ class PreferencesWindowController: NSObject, NSWindowDelegate {
         spacer.translatesAutoresizingMaskIntoConstraints = false
         spacer.setContentHuggingPriority(.defaultLow, for: .horizontal)
 
-        let btnStack = NSStackView(views: [splitHBtn, splitVBtn, splitH3Btn, splitV3Btn, spacer, removeBtn, undoBtn])
+        let btnStack = NSStackView(views: [splitHBtn, splitVBtn, splitH3Btn, splitV3Btn, spacer, removeBtn, unmergeBtn, undoBtn])
         btnStack.orientation = .horizontal
         btnStack.spacing = 8
         btnStack.translatesAutoresizingMaskIntoConstraints = false
         content.addSubview(btnStack)
 
         // ── Hint ──
-        let hint = NSTextField(labelWithString: "Click to select  \u{2022}  Shift-click to multi-select  \u{2022}  \u{2318}Z undo")
+        let hint = NSTextField(labelWithString: "Click a cell  \u{2022}  Shift-click to add adjacent cells, then Merge  \u{2022}  \u{2318}Z undo")
         hint.font = NSFont.systemFont(ofSize: 10)
         hint.textColor = .tertiaryLabelColor
         hint.translatesAutoresizingMaskIntoConstraints = false
@@ -282,9 +284,10 @@ class PreferencesWindowController: NSObject, NSWindowDelegate {
     private func updateButtons() {
         let count = splitView.selectedPaths.count
         let singleSelected = count == 1
-        let canMerge = count >= 1 && splitView.canMergeSelected()
+        let canCollapse = count == 1 && !(splitView.selectedPaths.first?.isEmpty ?? true)
         for b in [splitHBtn!, splitVBtn!, splitH3Btn!, splitV3Btn!] { b.isEnabled = singleSelected }
-        removeBtn.isEnabled = canMerge
+        removeBtn.isEnabled = canCollapse || splitView.canMergeSelected()
+        unmergeBtn.isEnabled = splitView.canUnmergeSelected()
         undoBtn.isEnabled = splitView.canUndo
     }
 
@@ -303,6 +306,7 @@ class PreferencesWindowController: NSObject, NSWindowDelegate {
     @objc private func doSplitH3() { splitView.splitSelected(direction: .horizontal, parts: 3); updateButtons() }
     @objc private func doSplitV3() { splitView.splitSelected(direction: .vertical, parts: 3); updateButtons() }
     @objc private func doRemove() { splitView.removeSelected(); updateButtons() }
+    @objc private func doUnmerge() { splitView.unmergeSelected(); updateButtons() }
     @objc private func doUndo() { splitView.undo(); updateButtons() }
 
     func windowWillClose(_ notification: Notification) { didClose?() }
@@ -341,20 +345,27 @@ class SplitEditorView: NSView {
     // MARK: - Drawing
 
     override func draw(_ dirtyRect: NSRect) {
-        drawNode(root, in: bounds, path: [])
-    }
+        let brandPurple = PreferencesWindowController.brandPurple
+        let cornerRadius: CGFloat = 6
 
-    private func drawNode(_ node: SplitNode, in rect: CGRect, path: [Int]) {
-        switch node {
-        case .zone(let label):
-            let isSel = selectedPaths.contains(path)
-            let r = rect.insetBy(dx: 2, dy: 2)
-            let cornerRadius: CGFloat = 6
+        // Group leaves by label so merged cells render as one union rectangle.
+        var order: [String] = []
+        var union: [String: CGRect] = [:]
+        var selectedLabels = Set<String>()
+        for info in leafInfos(root, in: bounds, path: []) {
+            if let existing = union[info.label] {
+                union[info.label] = existing.union(info.rect)
+            } else {
+                union[info.label] = info.rect
+                order.append(info.label)
+            }
+            if selectedPaths.contains(info.path) { selectedLabels.insert(info.label) }
+        }
 
-            // Brand colors
-            let brandPurple = PreferencesWindowController.brandPurple
+        for label in order {
+            let isSel = selectedLabels.contains(label)
+            let r = union[label]!.insetBy(dx: 2, dy: 2)
 
-            // Fill
             if isSel {
                 brandPurple.withAlphaComponent(0.12).setFill()
             } else {
@@ -363,7 +374,6 @@ class SplitEditorView: NSView {
             let p = NSBezierPath(roundedRect: r, xRadius: cornerRadius, yRadius: cornerRadius)
             p.fill()
 
-            // Border — thin and subtle
             if isSel {
                 brandPurple.withAlphaComponent(0.5).setStroke()
                 p.lineWidth = 1.5
@@ -373,7 +383,6 @@ class SplitEditorView: NSView {
             }
             p.stroke()
 
-            // Zone label
             let fs = max(10, min(18, min(r.width, r.height) / 4))
             let attrs: [NSAttributedString.Key: Any] = [
                 .font: NSFont.systemFont(ofSize: fs, weight: isSel ? .medium : .regular),
@@ -386,11 +395,17 @@ class SplitEditorView: NSView {
                 width: sz.width + 2,
                 height: sz.height)
             (label as NSString).draw(in: textRect, withAttributes: attrs)
+        }
+    }
 
+    /// All leaves with their path and rect (view coords), for the given bounds.
+    private func leafInfos(_ node: SplitNode, in rect: CGRect, path: [Int]) -> [(path: [Int], label: String, rect: CGRect)] {
+        switch node {
+        case .zone(let label):
+            return [(path: path, label: label, rect: rect)]
         case .split(let dir, let ratio, let first, let second):
             let (r1, r2) = splitRect(rect, direction: dir, ratio: ratio)
-            drawNode(first, in: r1, path: path + [0])
-            drawNode(second, in: r2, path: path + [1])
+            return leafInfos(first, in: r1, path: path + [0]) + leafInfos(second, in: r2, path: path + [1])
         }
     }
 
@@ -419,18 +434,13 @@ class SplitEditorView: NSView {
             return
         }
 
-        if event.modifierFlags.contains(.shift) && !selectedPaths.isEmpty {
-            var anchors = selectedPaths
-            if !anchors.contains(clicked) {
-                anchors.append(clicked)
+        if event.modifierFlags.contains(.shift) {
+            // Toggle the clicked cell in/out of the selection so the user can
+            // hand-pick any block of adjacent cells to merge.
+            if let idx = selectedPaths.firstIndex(of: clicked) {
+                selectedPaths.remove(at: idx)
             } else {
-                selectedPaths = []
-                onSelectionChanged?()
-                return
-            }
-            let lca = lowestCommonAncestor(anchors)
-            if let lcaNode = getNode(at: lca) {
-                selectedPaths = allLeafPaths(node: lcaNode, basePath: lca)
+                selectedPaths.append(clicked)
             }
         } else {
             selectedPaths = [clicked]
@@ -449,34 +459,33 @@ class SplitEditorView: NSView {
 
     // MARK: - Merge helpers
 
-    private func lowestCommonAncestor(_ paths: [[Int]]) -> [Int] {
-        guard let first = paths.first else { return [] }
-        var lca = first
-        for path in paths.dropFirst() {
-            var common: [Int] = []
-            for (a, b) in zip(lca, path) {
-                if a == b { common.append(a) } else { break }
-            }
-            lca = common
-        }
-        return lca
-    }
+    private static let unitRect = CGRect(x: 0, y: 0, width: 1, height: 1)
 
-    private func allLeafPaths(node: SplitNode, basePath: [Int]) -> [[Int]] {
-        switch node {
-        case .zone:
-            return [basePath]
-        case .split(_, _, let f, let s):
-            return allLeafPaths(node: f, basePath: basePath + [0]) +
-                   allLeafPaths(node: s, basePath: basePath + [1])
-        }
-    }
-
+    /// The selected cells can merge when they tile a solid rectangle (no gaps,
+    /// no unselected cell trapped inside) and span at least two distinct zones.
     func canMergeSelected() -> Bool {
-        if selectedPaths.count == 1 {
-            return selectedPaths[0].count > 0
-        }
-        return selectedPaths.count >= 2
+        guard selectedPaths.count >= 2 else { return false }
+        let infos = leafInfos(root, in: Self.unitRect, path: [])
+        let sel = infos.filter { selectedPaths.contains($0.path) }
+        guard sel.count == selectedPaths.count, sel.count >= 2 else { return false }
+        guard Set(sel.map { $0.label }).count >= 2 else { return false }
+        let bbox = sel.dropFirst().reduce(sel[0].rect) { $0.union($1.rect) }
+        let selArea = sel.reduce(0.0) { $0 + $1.rect.width * $1.rect.height }
+        let boxArea = bbox.width * bbox.height
+        // Equal areas ⇒ the selection fills its bounding box exactly (cells
+        // never overlap in a split tree, so no gaps and no trapped cell).
+        return abs(selArea - boxArea) < 1e-6
+    }
+
+    /// Unmerge is available when any selected cell belongs to a merged zone
+    /// (a label shared by more than one leaf).
+    func canUnmergeSelected() -> Bool {
+        guard !selectedPaths.isEmpty else { return false }
+        let infos = leafInfos(root, in: Self.unitRect, path: [])
+        var counts: [String: Int] = [:]
+        for i in infos { counts[i.label, default: 0] += 1 }
+        let selLabels = Set(infos.filter { selectedPaths.contains($0.path) }.map { $0.label })
+        return selLabels.contains { (counts[$0] ?? 0) > 1 }
     }
 
     // MARK: - Split
@@ -508,10 +517,11 @@ class SplitEditorView: NSView {
 
     // MARK: - Merge
 
+    /// The "Merge" button. One cell selected → collapse it into its sibling
+    /// (removes that divider). Two or more → fuse them into one merged zone.
     func removeSelected() {
-        pushUndo()
-
         if selectedPaths.count == 1 {
+            pushUndo()
             let path = selectedPaths[0]
             guard !path.isEmpty else { undoStack.removeLast(); return }
             let parentPath = Array(path.dropLast())
@@ -523,30 +533,75 @@ class SplitEditorView: NSView {
                 onTreeChanged?(root)
                 selectedPaths = []
                 onSelectionChanged?()
+            } else {
+                undoStack.removeLast()
             }
         } else if selectedPaths.count >= 2 {
-            let lca = lowestCommonAncestor(selectedPaths)
-            root = setNode(at: lca, to: .zone(label: "1"))
-            renumberAll()
-            onTreeChanged?(root)
-            selectedPaths = [lca]
-            onSelectionChanged?()
+            mergeSelected()
         }
+    }
+
+    /// Fuse the selected cells into a single zone by giving them a shared
+    /// label. The tree geometry is untouched, so the merged region can span
+    /// cells that live in different branches (e.g. top-half + top-of-bottom).
+    func mergeSelected() {
+        guard canMergeSelected() else { return }
+        pushUndo()
+        let selInfos = leafInfos(root, in: Self.unitRect, path: [])
+            .filter { selectedPaths.contains($0.path) }
+        let target = selInfos.map { $0.label }.min(by: Self.numericLess) ?? selInfos[0].label
+        for p in selectedPaths { root = setNode(at: p, to: .zone(label: target)) }
+        renumberAll()
+        onTreeChanged?(root)
+        onSelectionChanged?()
+    }
+
+    /// Break the selected merged zone(s) back into individual cells.
+    func unmergeSelected() {
+        guard canUnmergeSelected() else { return }
+        pushUndo()
+        let infos = leafInfos(root, in: Self.unitRect, path: [])
+        var counts: [String: Int] = [:]
+        for i in infos { counts[i.label, default: 0] += 1 }
+        let selLabels = Set(infos.filter { selectedPaths.contains($0.path) }.map { $0.label })
+        let mergedSel = selLabels.filter { (counts[$0] ?? 0) > 1 }
+        var counter = 0
+        root = mapLeafLabels(root) { label in
+            if mergedSel.contains(label) { counter += 1; return "u\(counter)" }
+            return label
+        }
+        renumberAll()
+        onTreeChanged?(root)
+        selectedPaths = []
+        onSelectionChanged?()
     }
 
     // MARK: - Tree utilities
 
-    func renumberAll() {
-        var n = 1
-        root = renum(root, &n)
+    private static func numericLess(_ a: String, _ b: String) -> Bool {
+        if let ia = Int(a), let ib = Int(b) { return ia < ib }
+        return a < b
     }
 
-    private func renum(_ node: SplitNode, _ n: inout Int) -> SplitNode {
+    private func mapLeafLabels(_ node: SplitNode, _ transform: (String) -> String) -> SplitNode {
         switch node {
-        case .zone:
-            let label = "\(n)"; n += 1; return .zone(label: label)
+        case .zone(let label):
+            return .zone(label: transform(label))
         case .split(let d, let r, let f, let s):
-            return .split(direction: d, ratio: r, first: renum(f, &n), second: renum(s, &n))
+            return .split(direction: d, ratio: r,
+                          first: mapLeafLabels(f, transform),
+                          second: mapLeafLabels(s, transform))
+        }
+    }
+
+    /// Renumber zones to 1…n by first appearance, preserving merge groups:
+    /// leaves that currently share a label keep sharing one (new) label.
+    func renumberAll() {
+        var map: [String: String] = [:]
+        var n = 1
+        root = mapLeafLabels(root) { old in
+            if let mapped = map[old] { return mapped }
+            let fresh = "\(n)"; n += 1; map[old] = fresh; return fresh
         }
     }
 
