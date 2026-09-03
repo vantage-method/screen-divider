@@ -3,3 +3,6 @@
 *.o
 .DS_Store
 *.dmg
+
+# Local paywall-unlock marker (never ship)
+.local-unlock
