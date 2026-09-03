@@ -38,19 +38,44 @@ class WindowManager {
         var position = CGPoint(x: frame.origin.x, y: frame.origin.y)
         var size = CGSize(width: frame.width, height: frame.height)
 
-        // Set position first, then size, then position again.
-        // Apps like Terminal resize in character-grid increments, so the
-        // actual size may differ from what we request. Re-setting position
-        // ensures the top-left corner stays pinned to the zone edge.
-        if let posValue = AXValueCreate(.cgPoint, &position) {
-            AXUIElementSetAttributeValue(window, kAXPositionAttribute as CFString, posValue)
+        // Some apps (Chromium/Electron: Chrome, VS Code, Slack, …) ignore AX
+        // size changes while AXEnhancedUserInterface is enabled on the owning
+        // app — the window moves but never resizes. Temporarily disable it,
+        // apply the frame, then restore it.
+        var pid: pid_t = 0
+        AXUIElementGetPid(window, &pid)
+        let app: AXUIElement? = pid != 0 ? AXUIElementCreateApplication(pid) : nil
+        var restoreEnhanced = false
+        if let app = app {
+            var current: AnyObject?
+            if AXUIElementCopyAttributeValue(app, "AXEnhancedUserInterface" as CFString, &current) == .success,
+               (current as? Bool) == true {
+                restoreEnhanced = true
+                AXUIElementSetAttributeValue(app, "AXEnhancedUserInterface" as CFString, kCFBooleanFalse)
+            }
         }
-        if let sizeValue = AXValueCreate(.cgSize, &size) {
-            AXUIElementSetAttributeValue(window, kAXSizeAttribute as CFString, sizeValue)
+
+        // size → position → size is the most reliable order across apps:
+        // the first size frees the window from its current bounds so the
+        // position can land, and the second corrects any clamping. Apps like
+        // Terminal resize in character-grid increments, so the final size may
+        // differ slightly; the position set keeps the top-left pinned.
+        let setSize: () -> Void = {
+            if let v = AXValueCreate(.cgSize, &size) {
+                AXUIElementSetAttributeValue(window, kAXSizeAttribute as CFString, v)
+            }
         }
-        // Re-pin position after size adjustment
-        if let posValue = AXValueCreate(.cgPoint, &position) {
-            AXUIElementSetAttributeValue(window, kAXPositionAttribute as CFString, posValue)
+        let setPosition: () -> Void = {
+            if let v = AXValueCreate(.cgPoint, &position) {
+                AXUIElementSetAttributeValue(window, kAXPositionAttribute as CFString, v)
+            }
+        }
+        setSize()
+        setPosition()
+        setSize()
+
+        if restoreEnhanced, let app = app {
+            AXUIElementSetAttributeValue(app, "AXEnhancedUserInterface" as CFString, kCFBooleanTrue)
         }
     }
 }
