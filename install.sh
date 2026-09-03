@@ -23,6 +23,7 @@ fi
 # Compile every Swift source so new files are picked up automatically.
 swiftc -sdk "$(xcrun --sdk macosx --show-sdk-path)" \
   -framework AppKit -framework ApplicationServices \
+  -framework StoreKit -framework ServiceManagement \
   $UNLOCK_FLAG \
   -O -o ScreenDivider \
   $(find Sources/ScreenDivider -name "*.swift")

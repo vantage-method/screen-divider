@@ -11,7 +11,7 @@ class ZoneOverlayView: NSView {
         NSColor.black.withAlphaComponent(0.12).setFill()
         bounds.fill()
 
-        let zones = layout.root.flattenZones()
+        let zones = layout.zoneRects
         for z in zones {
             let zoneRect = CoordinateHelper.viewRect(fractional: z.rect, screen: screen).insetBy(dx: 2, dy: 2)
             let isHit = z.label == highlightedLabel

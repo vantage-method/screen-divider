@@ -9,6 +9,7 @@ class PreferencesWindowController: NSObject, NSWindowDelegate {
     private var splitVBtn: NSButton!
     private var splitH3Btn: NSButton!
     private var splitV3Btn: NSButton!
+    private var mergeBtn: NSButton!
     private var removeBtn: NSButton!
     private var undoBtn: NSButton!
     private var savePresetBtn: NSButton!
@@ -58,7 +59,7 @@ class PreferencesWindowController: NSObject, NSWindowDelegate {
             if !config.screens.contains(where: { $0.screenName == name }) {
                 let defaultRoot: SplitNode = .split(direction: .vertical, ratio: 0.5,
                     first: .zone(label: "1"), second: .zone(label: "2"))
-                config.screens.append(ScreenLayout(screenName: name, root: defaultRoot))
+                config.screens.append(ScreenLayout(screenName: name, root: defaultRoot, grid: .defaultHalves))
             }
         }
     }
@@ -90,11 +91,10 @@ class PreferencesWindowController: NSObject, NSWindowDelegate {
         }
         let preset = presets[presetIdx]
         splitView.pushUndo()
-        splitView.root = preset.root
-        splitView.selectedPaths = []
-        splitView.renumberAll()
-        splitView.onTreeChanged?(splitView.root)
-        config.screens[selectedScreenIndex].root = splitView.root
+        var g = preset.grid ?? GridLayout(tree: preset.root)
+        g.normalize()
+        splitView.setGrid(g)
+        config.screens[selectedScreenIndex].grid = g
         autoSave()
         updateButtons()
         deletePresetBtn.isEnabled = true
@@ -113,7 +113,7 @@ class PreferencesWindowController: NSObject, NSWindowDelegate {
         guard alert.runModal() == .alertFirstButtonReturn else { return }
         let name = input.stringValue.trimmingCharacters(in: .whitespaces)
         guard !name.isEmpty else { return }
-        let preset = LayoutPreset(name: name, root: config.screens[selectedScreenIndex].root)
+        let preset = LayoutPreset(name: name, root: config.screens[selectedScreenIndex].root, grid: config.screens[selectedScreenIndex].effectiveGrid)
         if config.presets == nil { config.presets = [] }
         if let existing = config.presets!.firstIndex(where: { $0.name == name }) {
             config.presets![existing] = preset
@@ -192,9 +192,9 @@ class PreferencesWindowController: NSObject, NSWindowDelegate {
         splitView = SplitEditorView()
         splitView.translatesAutoresizingMaskIntoConstraints = false
         splitView.onSelectionChanged = { [weak self] in self?.updateButtons() }
-        splitView.onTreeChanged = { [weak self] newRoot in
+        splitView.onGridChanged = { [weak self] newGrid in
             guard let self = self else { return }
-            self.config.screens[self.selectedScreenIndex].root = newRoot
+            self.config.screens[self.selectedScreenIndex].grid = newGrid
             self.autoSave()
         }
         content.addSubview(splitView)
@@ -207,12 +207,13 @@ class PreferencesWindowController: NSObject, NSWindowDelegate {
         splitVBtn = makePillBtn("\u{2502} Half", #selector(doSplitV2), color: purple)
         splitH3Btn = makePillBtn("\u{2500} Thirds", #selector(doSplitH3), color: blue)
         splitV3Btn = makePillBtn("\u{2502} Thirds", #selector(doSplitV3), color: purple)
-        removeBtn = makePillBtn("Merge", #selector(doRemove))  // gradient (default)
+        mergeBtn = makePillBtn("Merge", #selector(doMerge))  // gradient (default)
+        removeBtn = makePillBtn("Remove", #selector(doRemove), color: NSColor.systemGray)
         undoBtn = makePillBtn("Undo", #selector(doUndo))
         undoBtn.keyEquivalent = "z"
         undoBtn.keyEquivalentModifierMask = .command
 
-        for b in [splitHBtn!, splitVBtn!, splitH3Btn!, splitV3Btn!, removeBtn!, undoBtn!] {
+        for b in [splitHBtn!, splitVBtn!, splitH3Btn!, splitV3Btn!, mergeBtn!, removeBtn!, undoBtn!] {
             b.isEnabled = false
         }
 
@@ -220,14 +221,14 @@ class PreferencesWindowController: NSObject, NSWindowDelegate {
         spacer.translatesAutoresizingMaskIntoConstraints = false
         spacer.setContentHuggingPriority(.defaultLow, for: .horizontal)
 
-        let btnStack = NSStackView(views: [splitHBtn, splitVBtn, splitH3Btn, splitV3Btn, spacer, removeBtn, undoBtn])
+        let btnStack = NSStackView(views: [splitHBtn, splitVBtn, splitH3Btn, splitV3Btn, spacer, mergeBtn, removeBtn, undoBtn])
         btnStack.orientation = .horizontal
         btnStack.spacing = 8
         btnStack.translatesAutoresizingMaskIntoConstraints = false
         content.addSubview(btnStack)
 
         // ── Hint ──
-        let hint = NSTextField(labelWithString: "Click to select  \u{2022}  Shift-click to multi-select  \u{2022}  \u{2318}Z undo")
+        let hint = NSTextField(labelWithString: "Click to select  \u{2022}  Shift-click for multi-select  \u{2022}  Merge any rectangle  \u{2022}  Click an empty cell to fill it  \u{2022}  \u{2318}Z undo")
         hint.font = NSFont.systemFont(ofSize: 10)
         hint.textColor = .tertiaryLabelColor
         hint.translatesAutoresizingMaskIntoConstraints = false
@@ -280,19 +281,17 @@ class PreferencesWindowController: NSObject, NSWindowDelegate {
     static let brandPink = NSColor(calibratedRed: 0.85, green: 0.30, blue: 0.65, alpha: 1.0)
 
     private func updateButtons() {
-        let count = splitView.selectedPaths.count
-        let singleSelected = count == 1
-        let canMerge = count >= 1 && splitView.canMergeSelected()
-        for b in [splitHBtn!, splitVBtn!, splitH3Btn!, splitV3Btn!] { b.isEnabled = singleSelected }
-        removeBtn.isEnabled = canMerge
+        let count = splitView.selected.count
+        for b in [splitHBtn!, splitVBtn!, splitH3Btn!, splitV3Btn!] { b.isEnabled = count == 1 }
+        mergeBtn.isEnabled = splitView.canMergeSelected()
+        removeBtn.isEnabled = count >= 1
         undoBtn.isEnabled = splitView.canUndo
     }
 
     private func loadScreen(at index: Int) {
         guard index >= 0 && index < config.screens.count else { return }
         selectedScreenIndex = index
-        splitView.root = config.screens[index].root
-        splitView.selectedPaths = []
+        splitView.setGrid(config.screens[index].effectiveGrid)
         splitView.clearUndo()
         updateButtons()
     }
@@ -302,29 +301,36 @@ class PreferencesWindowController: NSObject, NSWindowDelegate {
     @objc private func doSplitV2() { splitView.splitSelected(direction: .vertical, parts: 2); updateButtons() }
     @objc private func doSplitH3() { splitView.splitSelected(direction: .horizontal, parts: 3); updateButtons() }
     @objc private func doSplitV3() { splitView.splitSelected(direction: .vertical, parts: 3); updateButtons() }
+    @objc private func doMerge() { splitView.mergeSelected(); updateButtons() }
     @objc private func doRemove() { splitView.removeSelected(); updateButtons() }
     @objc private func doUndo() { splitView.undo(); updateButtons() }
 
     func windowWillClose(_ notification: Notification) { didClose?() }
 }
 
-// MARK: - Visual Split Editor View
+// MARK: - Visual Grid Editor View
 
 class SplitEditorView: NSView {
-    var root: SplitNode = .zone(label: "1") { didSet { needsDisplay = true } }
-    var selectedPaths: [[Int]] = [] { didSet { needsDisplay = true } }
+    var grid: GridLayout = .defaultHalves { didSet { needsDisplay = true } }
+    var selected: Set<Int> = [] { didSet { needsDisplay = true } }
     var onSelectionChanged: (() -> Void)?
-    var onTreeChanged: ((SplitNode) -> Void)?
+    var onGridChanged: ((GridLayout) -> Void)?
 
-    private var undoStack: [SplitNode] = []
+    private var undoStack: [GridLayout] = []
     var canUndo: Bool { !undoStack.isEmpty }
 
     override var acceptsFirstResponder: Bool { true }
 
+    func setGrid(_ g: GridLayout) {
+        grid = g
+        selected = []
+        needsDisplay = true
+    }
+
     // MARK: - Undo
 
     func pushUndo() {
-        undoStack.append(root)
+        undoStack.append(grid)
         if undoStack.count > 50 { undoStack.removeFirst() }
     }
 
@@ -332,29 +338,53 @@ class SplitEditorView: NSView {
 
     func undo() {
         guard let previous = undoStack.popLast() else { return }
-        root = previous
-        selectedPaths = []
-        onTreeChanged?(root)
+        grid = previous
+        selected = []
+        onGridChanged?(grid)
         onSelectionChanged?()
+    }
+
+    private func commit() {
+        grid.normalize()
+        onGridChanged?(grid)
+        needsDisplay = true
     }
 
     // MARK: - Drawing
 
-    override func draw(_ dirtyRect: NSRect) {
-        drawNode(root, in: bounds, path: [])
+    private func viewRect(_ fractional: CGRect) -> CGRect {
+        CGRect(x: bounds.minX + fractional.minX * bounds.width,
+               y: bounds.minY + fractional.minY * bounds.height,
+               width: fractional.width * bounds.width,
+               height: fractional.height * bounds.height)
     }
 
-    private func drawNode(_ node: SplitNode, in rect: CGRect, path: [Int]) {
-        switch node {
-        case .zone(let label):
-            let isSel = selectedPaths.contains(path)
-            let r = rect.insetBy(dx: 2, dy: 2)
+    override func draw(_ dirtyRect: NSRect) {
+        let brandPurple = PreferencesWindowController.brandPurple
+
+        // faint cell lattice underneath (shows empty cells + merge structure)
+        NSColor.separatorColor.withAlphaComponent(0.10).setStroke()
+        let re = grid.rowEdges(), ce = grid.colEdges()
+        for e in re.dropFirst().dropLast() {
+            let path = NSBezierPath()
+            path.move(to: CGPoint(x: bounds.minX, y: bounds.minY + CGFloat(e) * bounds.height))
+            path.line(to: CGPoint(x: bounds.maxX, y: bounds.minY + CGFloat(e) * bounds.height))
+            path.lineWidth = 0.5
+            path.stroke()
+        }
+        for e in ce.dropFirst().dropLast() {
+            let path = NSBezierPath()
+            path.move(to: CGPoint(x: bounds.minX + CGFloat(e) * bounds.width, y: bounds.minY))
+            path.line(to: CGPoint(x: bounds.minX + CGFloat(e) * bounds.width, y: bounds.maxY))
+            path.lineWidth = 0.5
+            path.stroke()
+        }
+
+        for (i, z) in grid.rects().enumerated() {
+            let isSel = selected.contains(i)
+            let r = viewRect(z.rect).insetBy(dx: 2, dy: 2)
             let cornerRadius: CGFloat = 6
 
-            // Brand colors
-            let brandPurple = PreferencesWindowController.brandPurple
-
-            // Fill
             if isSel {
                 brandPurple.withAlphaComponent(0.12).setFill()
             } else {
@@ -363,7 +393,6 @@ class SplitEditorView: NSView {
             let p = NSBezierPath(roundedRect: r, xRadius: cornerRadius, yRadius: cornerRadius)
             p.fill()
 
-            // Border — thin and subtle
             if isSel {
                 brandPurple.withAlphaComponent(0.5).setStroke()
                 p.lineWidth = 1.5
@@ -373,203 +402,76 @@ class SplitEditorView: NSView {
             }
             p.stroke()
 
-            // Zone label
             let fs = max(10, min(18, min(r.width, r.height) / 4))
             let attrs: [NSAttributedString.Key: Any] = [
                 .font: NSFont.systemFont(ofSize: fs, weight: isSel ? .medium : .regular),
                 .foregroundColor: isSel ? brandPurple.withAlphaComponent(0.7) : NSColor.quaternaryLabelColor
             ]
-            let sz = (label as NSString).size(withAttributes: attrs)
-            let textRect = NSRect(
-                x: r.midX - sz.width / 2,
-                y: r.midY - sz.height / 2,
-                width: sz.width + 2,
-                height: sz.height)
-            (label as NSString).draw(in: textRect, withAttributes: attrs)
-
-        case .split(let dir, let ratio, let first, let second):
-            let (r1, r2) = splitRect(rect, direction: dir, ratio: ratio)
-            drawNode(first, in: r1, path: path + [0])
-            drawNode(second, in: r2, path: path + [1])
+            let sz = (z.label as NSString).size(withAttributes: attrs)
+            let textRect = NSRect(x: r.midX - sz.width / 2, y: r.midY - sz.height / 2,
+                                  width: sz.width + 2, height: sz.height)
+            (z.label as NSString).draw(in: textRect, withAttributes: attrs)
         }
     }
 
-    private func splitRect(_ rect: CGRect, direction: SplitDirection, ratio: Double) -> (CGRect, CGRect) {
-        let r = CGFloat(ratio)
-        switch direction {
-        case .vertical:
-            let w1 = rect.width * r
-            return (CGRect(x: rect.minX, y: rect.minY, width: w1, height: rect.height),
-                    CGRect(x: rect.minX + w1, y: rect.minY, width: rect.width - w1, height: rect.height))
-        case .horizontal:
-            let h2 = rect.height * (1 - r)
-            return (CGRect(x: rect.minX, y: rect.minY + h2, width: rect.width, height: rect.height - h2),
-                    CGRect(x: rect.minX, y: rect.minY, width: rect.width, height: h2))
-        }
-    }
-
-    // MARK: - Mouse handling
+    // MARK: - Mouse
 
     override func mouseDown(with event: NSEvent) {
         window?.makeFirstResponder(self)
         let pt = convert(event.locationInWindow, from: nil)
-        guard let clicked = findZone(root, pt, bounds, []) else {
-            selectedPaths = []
-            onSelectionChanged?()
-            return
-        }
+        guard bounds.width > 0, bounds.height > 0 else { return }
+        let fp = CGPoint(x: (pt.x - bounds.minX) / bounds.width,
+                         y: (pt.y - bounds.minY) / bounds.height)
 
-        if event.modifierFlags.contains(.shift) && !selectedPaths.isEmpty {
-            var anchors = selectedPaths
-            if !anchors.contains(clicked) {
-                anchors.append(clicked)
+        let hit = grid.rects().firstIndex { $0.rect.insetBy(dx: -0.001, dy: -0.001).contains(fp) }
+
+        if let i = hit {
+            if event.modifierFlags.contains(.shift) {
+                if selected.contains(i) { selected.remove(i) } else { selected.insert(i) }
             } else {
-                selectedPaths = []
-                onSelectionChanged?()
-                return
+                selected = selected == [i] ? [] : [i]
             }
-            let lca = lowestCommonAncestor(anchors)
-            if let lcaNode = getNode(at: lca) {
-                selectedPaths = allLeafPaths(node: lcaNode, basePath: lca)
-            }
+        } else if let cell = grid.cell(atPoint: fp), grid.zoneIndex(atRow: cell.r, col: cell.c) == nil {
+            // empty cell: create a zone there
+            pushUndo()
+            grid.addZone(atRow: cell.r, col: cell.c)
+            commit()
+            selected = []
         } else {
-            selectedPaths = [clicked]
+            selected = []
         }
         onSelectionChanged?()
     }
 
-    private func findZone(_ node: SplitNode, _ pt: CGPoint, _ rect: CGRect, _ path: [Int]) -> [Int]? {
-        switch node {
-        case .zone: return rect.contains(pt) ? path : nil
-        case .split(let d, let r, let f, let s):
-            let (r1, r2) = splitRect(rect, direction: d, ratio: r)
-            return findZone(f, pt, r1, path+[0]) ?? findZone(s, pt, r2, path+[1])
-        }
-    }
+    // MARK: - Operations
 
-    // MARK: - Merge helpers
-
-    private func lowestCommonAncestor(_ paths: [[Int]]) -> [Int] {
-        guard let first = paths.first else { return [] }
-        var lca = first
-        for path in paths.dropFirst() {
-            var common: [Int] = []
-            for (a, b) in zip(lca, path) {
-                if a == b { common.append(a) } else { break }
-            }
-            lca = common
-        }
-        return lca
-    }
-
-    private func allLeafPaths(node: SplitNode, basePath: [Int]) -> [[Int]] {
-        switch node {
-        case .zone:
-            return [basePath]
-        case .split(_, _, let f, let s):
-            return allLeafPaths(node: f, basePath: basePath + [0]) +
-                   allLeafPaths(node: s, basePath: basePath + [1])
-        }
-    }
-
-    func canMergeSelected() -> Bool {
-        if selectedPaths.count == 1 {
-            return selectedPaths[0].count > 0
-        }
-        return selectedPaths.count >= 2
-    }
-
-    // MARK: - Split
+    func canMergeSelected() -> Bool { grid.canMerge(selected) }
 
     func splitSelected(direction: SplitDirection, parts: Int) {
-        guard selectedPaths.count == 1, let path = selectedPaths.first,
-              let node = getNode(at: path), case .zone = node else { return }
-
+        guard selected.count == 1, let i = selected.first else { return }
         pushUndo()
-        let newNode: SplitNode
-        if parts == 3 {
-            newNode = .split(direction: direction, ratio: 1.0/3.0,
-                first: .zone(label: "a"),
-                second: .split(direction: direction, ratio: 0.5,
-                    first: .zone(label: "b"),
-                    second: .zone(label: "c")))
-        } else {
-            newNode = .split(direction: direction, ratio: 0.5,
-                first: .zone(label: "a"),
-                second: .zone(label: "b"))
-        }
-
-        root = setNode(at: path, to: newNode)
-        renumberAll()
-        onTreeChanged?(root)
-        selectedPaths = [path + [0]]
+        grid.splitZone(at: i, direction: direction, parts: parts)
+        commit()
+        selected = []
         onSelectionChanged?()
     }
 
-    // MARK: - Merge
+    func mergeSelected() {
+        guard grid.canMerge(selected) else { return }
+        pushUndo()
+        grid.merge(selected)
+        commit()
+        selected = []
+        onSelectionChanged?()
+    }
 
     func removeSelected() {
+        guard !selected.isEmpty else { return }
         pushUndo()
-
-        if selectedPaths.count == 1 {
-            let path = selectedPaths[0]
-            guard !path.isEmpty else { undoStack.removeLast(); return }
-            let parentPath = Array(path.dropLast())
-            guard let parent = getNode(at: parentPath) else { undoStack.removeLast(); return }
-            if case .split(_, _, let f, let s) = parent {
-                let keep = path.last! == 0 ? s : f
-                root = setNode(at: parentPath, to: keep)
-                renumberAll()
-                onTreeChanged?(root)
-                selectedPaths = []
-                onSelectionChanged?()
-            }
-        } else if selectedPaths.count >= 2 {
-            let lca = lowestCommonAncestor(selectedPaths)
-            root = setNode(at: lca, to: .zone(label: "1"))
-            renumberAll()
-            onTreeChanged?(root)
-            selectedPaths = [lca]
-            onSelectionChanged?()
-        }
-    }
-
-    // MARK: - Tree utilities
-
-    func renumberAll() {
-        var n = 1
-        root = renum(root, &n)
-    }
-
-    private func renum(_ node: SplitNode, _ n: inout Int) -> SplitNode {
-        switch node {
-        case .zone:
-            let label = "\(n)"; n += 1; return .zone(label: label)
-        case .split(let d, let r, let f, let s):
-            return .split(direction: d, ratio: r, first: renum(f, &n), second: renum(s, &n))
-        }
-    }
-
-    private func getNode(at path: [Int]) -> SplitNode? {
-        var cur = root
-        for i in path {
-            guard case .split(_, _, let f, let s) = cur else { return nil }
-            cur = i == 0 ? f : s
-        }
-        return cur
-    }
-
-    private func setNode(at path: [Int], to new: SplitNode) -> SplitNode {
-        return setRec(root, path, new)
-    }
-
-    private func setRec(_ node: SplitNode, _ path: [Int], _ new: SplitNode) -> SplitNode {
-        if path.isEmpty { return new }
-        guard case .split(let d, let r, let f, let s) = node else { return node }
-        let rest = Array(path.dropFirst())
-        return path[0] == 0
-            ? .split(direction: d, ratio: r, first: setRec(f, rest, new), second: s)
-            : .split(direction: d, ratio: r, first: f, second: setRec(s, rest, new))
+        grid.removeZones(selected)
+        commit()
+        selected = []
+        onSelectionChanged?()
     }
 }
 

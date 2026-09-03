@@ -24,7 +24,7 @@ class ConfigManager {
                 if !config.screens.contains(where: { $0.screenName == name }) {
                     let defaultRoot: SplitNode = .split(direction: .vertical, ratio: 0.5,
                         first: .zone(label: "1"), second: .zone(label: "2"))
-                    config.screens.append(ScreenLayout(screenName: name, root: defaultRoot))
+                    config.screens.append(ScreenLayout(screenName: name, root: defaultRoot, grid: .defaultHalves))
                 }
             }
 
@@ -60,9 +60,9 @@ class ConfigManager {
                     first: .zone(label: "3"), second: .zone(label: "4")))
 
             // Create an entry for each connected screen
-            let screens = NSScreen.screens.map { ScreenLayout(screenName: $0.localizedName, root: defaultRoot) }
+            let screens = NSScreen.screens.map { ScreenLayout(screenName: $0.localizedName, root: defaultRoot, grid: .defaultQuad) }
             let defaultConfig = ScreenDividerConfig(screens: screens.isEmpty
-                ? [ScreenLayout(screenName: "Display", root: defaultRoot)]
+                ? [ScreenLayout(screenName: "Display", root: defaultRoot, grid: .defaultQuad)]
                 : screens)
             save(defaultConfig)
         }

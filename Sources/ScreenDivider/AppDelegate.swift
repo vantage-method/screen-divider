@@ -196,7 +196,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         // Screen layouts
         if let config = currentConfig {
             for (index, layout) in config.screens.enumerated() {
-                let count = layout.root.zoneCount
+                let count = layout.zoneRects.count
                 let item = NSMenuItem(title: "\(layout.screenName) — \(count) zones", action: #selector(openPreferencesForScreen(_:)), keyEquivalent: "")
                 item.target = self
                 item.tag = index
